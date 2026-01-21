@@ -60,6 +60,7 @@ class DAQSystem:
         if self.running: return
         print("[DAQ] Starting system...")
         self.running = True
+        self.tof_buffer = []
 
         self.spec_reader.start()
         self.wave_reader.start()
@@ -133,6 +134,9 @@ class DAQSystem:
             print(f"[DAQ] Failed to save metadata: {e}")
 
         self.scanner.configure(min_wn, max_wn, step, stop_mode, stop_value)
+        self.scanner.reset()
+        self.tof_buffer = [] # Clear buffer on new scan
+
         self.scanner.start()
 
     def _daq_loop(self):
@@ -177,6 +181,7 @@ class DAQSystem:
                     # Only save if accumulating AND saver is active
                     if self.scanner.is_accumulating and self.saver:
                         self.saver.add_event(record)
+                        self.tof_buffer.append(entry[3]) # entry[3] is ToF
                         self.scanner.report_event(is_bunch=False)
 
             time.sleep(0.005)

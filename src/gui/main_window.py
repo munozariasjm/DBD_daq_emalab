@@ -262,7 +262,8 @@ class MainWindow(QMainWindow):
             'wn': list(self.wn_history),
             'target_wn': list(self.target_wn_history),
             'volt': list(self.volt_history),
-            'scan_data': self.daq.scanner.scan_progress
+            'scan_data': self.daq.scanner.scan_progress,
+            'tof_buffer': self.daq.tof_buffer if hasattr(self.daq, 'tof_buffer') else []
         }
         self.plot_widget.update_plots(history)
 

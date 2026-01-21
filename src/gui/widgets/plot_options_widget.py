@@ -34,6 +34,10 @@ class PlotOptionsWidget(QWidget):
         self.chk_volt.toggled.connect(self.emit_options)
         layout_opts.addWidget(self.chk_volt)
 
+        self.chk_tof = QCheckBox("ToF Histogram")
+        self.chk_tof.toggled.connect(self.emit_options)
+        layout_opts.addWidget(self.chk_tof)
+
         layout.addWidget(grp_opts)
 
     def emit_options(self):
@@ -41,7 +45,8 @@ class PlotOptionsWidget(QWidget):
             'rate': self.chk_rate.isChecked(),
             'scan': self.chk_scan.isChecked(),
             'laser': self.chk_laser.isChecked(),
-            'volt': self.chk_volt.isChecked()
+            'volt': self.chk_volt.isChecked(),
+            'tof': self.chk_tof.isChecked()
         }
         self.options_changed.emit(options)
 
@@ -50,5 +55,6 @@ class PlotOptionsWidget(QWidget):
             'rate': self.chk_rate.isChecked(),
             'scan': self.chk_scan.isChecked(),
             'laser': self.chk_laser.isChecked(),
-            'volt': self.chk_volt.isChecked()
+            'volt': self.chk_volt.isChecked(),
+            'tof': self.chk_tof.isChecked()
         }

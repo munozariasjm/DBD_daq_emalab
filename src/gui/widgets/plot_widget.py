@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout)
+import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -7,7 +8,8 @@ class PlotWidget(QWidget):
         super().__init__(parent)
         self.axes = {}
         self.lines = {}
-        self.active_options = {'rate': True, 'scan': True, 'laser': False, 'volt': False}
+        self.bars = {}
+        self.active_options = {'rate': True, 'scan': True, 'laser': False, 'volt': False, 'tof': False}
         self.init_ui()
 
     def init_ui(self):
@@ -30,6 +32,7 @@ class PlotWidget(QWidget):
         self.fig.clf()
         self.axes = {}
         self.lines = {}
+        self.bars = {}
 
         # Determine active plots from options dict
         active_plots = []
@@ -37,6 +40,7 @@ class PlotWidget(QWidget):
         if self.active_options.get('scan'): active_plots.append('scan')
         if self.active_options.get('laser'): active_plots.append('laser')
         if self.active_options.get('volt'): active_plots.append('volt')
+        if self.active_options.get('tof'): active_plots.append('tof')
 
         num_plots = len(active_plots)
         if num_plots == 0:
@@ -70,6 +74,13 @@ class PlotWidget(QWidget):
                 ax.set_title("Voltage vs Time")
                 ax.set_ylabel("Voltage (V)")
                 self.lines['volt'], = ax.plot([], [], 'm-')
+                ax.grid(True)
+            elif name == 'tof':
+                ax.set_title("ToF Histogram (Accumulated)")
+                ax.set_xlabel("ToF")
+                ax.set_ylabel("Density")
+                # We use a line plot to represent histogram steps for performance
+                self.lines['tof'], = ax.plot([], [], 'k-', drawstyle='steps-mid')
                 ax.grid(True)
 
         self.fig.tight_layout()
@@ -128,5 +139,19 @@ class PlotWidget(QWidget):
                 v_span = max_v - min_v
                 if v_span < 0.1: v_span = 0.1
                 ax.set_ylim(min_v - v_span*0.2, max_v + v_span*0.2)
+
+        # ToF
+        if 'tof' in self.lines:
+            tof_data = history.get('tof_buffer', [])
+            if tof_data and len(tof_data) > 0:
+                # Compute histogram
+                counts, bin_edges = np.histogram(tof_data, bins=50, density=True)
+                centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+                self.lines['tof'].set_data(centers, counts)
+                ax = self.axes['tof']
+                ax.set_xlim(min(centers), max(centers))
+                ax.set_ylim(0, max(counts) * 1.1)
+                ax.set_title(f"ToF Histogram ({len(tof_data)} events)")
 
         self.canvas.draw_idle()

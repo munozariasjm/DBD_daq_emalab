@@ -8,13 +8,13 @@ class MockLaser:
     Simulates a Tunable Laser.
     Movements are not immediate and have noise.
     """
-    def __init__(self):
+    def __init__(self, initialization_params: dict = {}):
         self.current_wavelength = 600.000 # nm
         self.target_wavelength = 600.000
         self.is_moving = False
         self.last_update = time.time()
-        self.move_speed = 10.0 # nm/sec
-        self.noise_level = 0.001 # nm
+        self.move_speed = initialization_params.get("move_speed", 10.0) # nm/sec
+        self.noise_level = initialization_params.get("noise_level", 0.001) # nm
 
         # Thread safety
         self.lock = threading.Lock()

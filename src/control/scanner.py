@@ -14,7 +14,6 @@ class Scanner(threading.Thread):
         self.pause_event.set() # Set means "Not Paused" (Running)
 
         # Scan Configuration
-        # Scan Configuration
         self.min_wn = 16666.0
         self.max_wn = 16680.0
         self.step_size = 0.5 # cm^-1
@@ -29,13 +28,13 @@ class Scanner(threading.Thread):
         self.is_accumulating = False # If True, we are in the "Measurement" phase
 
         # Results (for plotting)
-        # List of (wavelength, rate_cps)
         self.scan_progress = []
 
         # Timing for ETA
         self.start_timestamp = 0
         self.bins_completed = 0
         self.total_bins = 0
+        self.bin_paused_duration = 0.0
 
     def set_wavemeter(self, wavemeter):
         self.wavemeter = wavemeter
@@ -82,9 +81,14 @@ class Scanner(threading.Thread):
                 self.current_bin_index = i
                 self.current_wavenumber = wn
 
-                # 1. Move Laser (Convert to nm)
-                target_nm = self.wavenumber_to_wavelength(wn)
-                self.laser.set_wavelength(target_nm)
+                # 1. Move Laser
+                # Check if laser supports setting wavenumber directly (Preferred for realistic control)
+                if hasattr(self.laser, 'set_wavenumber'):
+                    self.laser.set_wavenumber(wn)
+                else:
+                    # Fallback to Wavelength (nm)
+                    target_nm = self.wavenumber_to_wavelength(wn)
+                    self.laser.set_wavelength(target_nm)
 
                 # 2. Wait for stable
                 # We wait until the laser reports it is stable at the new wavelength
@@ -101,7 +105,6 @@ class Scanner(threading.Thread):
                 self.bin_paused_duration = 0.0 # Track time spent paused
 
                 start_time = time.time()
-                # print(f"[Scanner Debug] Start Accumulating. Mode={self.stop_mode}, Value={self.stop_value}")
 
                 # Wait loop
                 while True:

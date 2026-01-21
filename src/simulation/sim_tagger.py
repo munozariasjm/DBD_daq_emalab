@@ -14,9 +14,9 @@ class MockTagger:
         self.start_time = 0.0
 
         # Physics / Simulation Parameters
-        self.repetition_rate = 50.0  # Hz
+        self.repetition_rate = initialization_params.get("repetition_rate", 50.0)  # Hz
         self.period = 1.0 / self.repetition_rate  # 0.02 seconds
-        self.mean_events_per_bunch = 2_00.0  # Lambda for Poisson distribution
+        self.mean_events_per_bunch = initialization_params.get("mean_events_per_bunch", 200.0)  # Lambda for Poisson distribution
 
         # Tracks the theoretical time of the last generated trigger
         # to ensure perfect 50Hz periodicity without drift.

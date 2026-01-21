@@ -8,8 +8,9 @@ class MockMultimeter:
     Simulates an HP Multimeter communicating via Serial.
     Returns a noisy sine wave voltage.
     """
-    def __init__(self, port):
+    def __init__(self, port, initialization_params: dict = {}):
         self.port = port
+        self.noise_level = initialization_params.get("noise_level", 0.05)
         print(f"[SIM] MockMultimeter connected on {port}")
         self.start_time = time.time()
 
@@ -26,7 +27,7 @@ class MockMultimeter:
         # Generate a sine wave oscillating between 0.5V and 4.5V with noise
         elapsed = time.time() - self.start_time
         base_signal = 2.5 + 2.0 * math.sin(elapsed * 0.5)
-        noise = random.uniform(-0.05, 0.05)
+        noise = random.uniform(-self.noise_level, self.noise_level)
         return round(base_signal + noise, 5)
 
 
@@ -86,11 +87,16 @@ class MockWavenumberReader(threading.Thread):
         # 600 nm -> 16666.6 cm^-1
         if i == 1 and self.source:
             # Measure the source!
-            wl = self.source.get_wavelength()
-            if wl > 0:
-                base = 1e7 / wl
+            if hasattr(self.source, 'get_wavenumber'):
+                base = self.source.get_wavenumber()
+            elif hasattr(self.source, 'get_wavelength'):
+                wl = self.source.get_wavelength()
+                if wl > 0:
+                    base = 1e7 / wl
+                else:
+                    base = 16666.6
             else:
-                base = 16666.6
+                 base = 16666.6
         else:
             base = 16666.6 + (i-1) * 1000.0
 

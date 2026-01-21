@@ -1,0 +1,39 @@
+{
+    "scan_settings": {
+        "min_wn": 16666.0,
+        "max_wn": 16680.0,
+        "step_size": 1.0,
+        "stop_mode": "bunches",
+        "stop_val": 100.0
+    },
+    "gui_settings": {
+        "window_width": 1200,
+        "window_height": 800,
+        "refresh_rate_ms": 100
+    },
+    "data_settings": {
+        "default_save_dir": "data",
+        "auto_save": true
+    },
+    "simulation_settings": {
+        "tagger": {
+            "repetition_rate": 50.0,
+            "mean_events_per_bunch": 200.0
+        },
+        "laser": {
+            "move_speed": 10.0,
+            "noise_level": 0.001
+        },
+        "multimeter": {
+            "noise_level": 0.05
+        }
+    },
+    "control_settings": {
+        "laser": {
+            "tolerance": 0.01,
+            "step_fine": 0.0001,
+            "step_coarse": 0.05,
+            "poll_interval": 0.5
+        }
+    }
+}

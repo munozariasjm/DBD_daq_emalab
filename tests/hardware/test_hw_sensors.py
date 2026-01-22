@@ -3,7 +3,7 @@ import os
 import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from src.devices.sensors import Multimeter, SpectrometreReader, WavenumberReader
+from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader
 
 def test_sensors():
     print("=== Testing Real Hardware: Sensors ===")
@@ -12,17 +12,18 @@ def test_sensors():
         # --- Multimeter ---
         print("\n[Multimeter]")
         print("1. Initializing...")
-        mm = Multimeter(port="COM1") # TODO: Update COM port
+        mm = HP_Multimeter(port="COM16") # TODO: Update COM port
+        # mm = Multimeter(multi)
 
         print("2. Setup...")
         mm.reset()
-        mm.setRemote()
-        print(f"   Identity: {mm.identity()}")
+        # mm.start()
 
         print("3. Reading Voltage...")
         v = mm.getVoltage()
         print(f"   Voltage: {v} V")
         print("   [PASS] Multimeter")
+        # mm.stop()
 
         # --- Spectrometer ---
         print("\n[Spectrometer]")
@@ -32,7 +33,7 @@ def test_sensors():
 
         print("2. Reading Spectrum Peak (3s)...")
         for _ in range(3):
-            time.sleep(1)
+            time.sleep(.1)
             print(f"   Current Spectrum Peak: {spec.spectrum}")
 
         spec.stop()
@@ -43,16 +44,11 @@ def test_sensors():
         print("\n[Wavemeter]")
         print("1. Initializing Reader...")
         wave = WavenumberReader()
-        wave.start()
 
         print("2. Reading Wavenumbers (3s)...")
-        for _ in range(3):
-            time.sleep(1)
-            wns = wave.get_wavenumbers()
-            print(f"   Wavenumbers: {wns}")
+        wns = wave.get_wavenumbers()
+        print(wns)
 
-        wave.stop()
-        wave.join()
         print("   [PASS] Wavemeter")
 
         print("\n=== Sensors Test Complete ===")

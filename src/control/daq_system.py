@@ -21,7 +21,7 @@ from src.control.scanner import Scanner
 # Real Hardware Imports
 from src.devices.tagger import Tagger
 from src.devices.laser import PIGCSDevice, EpicsClient
-from src.devices.sensors import Multimeter, SpectrometreReader, WavenumberReader
+from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
 class DAQSystem:
     def __init__(self, config=None):
@@ -52,23 +52,26 @@ class DAQSystem:
 
         else:
             # --- Real Hardware Mode ---
-            self.tagger = Tagger(initialization_params=sim_config.get("tagger", {}))
+            print("Using real ")
+            self.tagger = Tagger(index=0)
 
-            self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
+            # SIMULATING MOTOR FOR NOW
+            #self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
             # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
+            
+            self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
+            self.pi_device.SVO(1, 1) # Enable Servo for simulation
 
             self.epics_client = EpicsClient(self.pi_device, initialization_params=epics_sim_settings)
 
-            self.multimeter = Multimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
+            self.hp_multimeter = HP_Multimeter(port="COM16")#, initialization_params=sim_config.get("multimeter", {}))
+            self.multimeter = VoltageReader(self.hp_multimeter)
+            # self.multimeter.reset()
             self.spec_reader = SpectrometreReader()
-            self.wave_reader = WavenumberReader(source=None)
+            self.wave_reader = WavenumberReader()
 
         # Initialize Controller (Shared Logic)
         self.laser = LaserController(self.pi_device, self.epics_client, config=laser_control_settings)
-
-        # Link reader source if needed
-        if hasattr(self.wave_reader, 'source'):
-             self.wave_reader.source = self.laser
 
         # Services
         self.saver = None
@@ -94,7 +97,7 @@ class DAQSystem:
         self.tof_buffer = []
 
         self.spec_reader.start()
-        self.wave_reader.start()
+        self.multimeter.start()
         self.tagger.start_reading()
         # Saver is now started per scan
 
@@ -119,7 +122,7 @@ class DAQSystem:
 
         self.tagger.stop()
         self.spec_reader.stop()
-        self.wave_reader.stop()
+        self.multimeter.stop()
 
     def start_scan(self, min_wn, max_wn, step, stop_mode, stop_value):
         # If scanner is old/dead, recreate it
@@ -189,13 +192,13 @@ class DAQSystem:
             data = self.tagger.get_data()
 
             # Latest sensors
-            current_voltage = self.multimeter.getVoltage()
+            current_voltage = self.multimeter.get_voltage()
             current_spec = self.spec_reader.spectrum
             current_wns = self.wave_reader.get_wavenumbers()
 
             for entry in data:
                 channel = entry[2]
-                timestamp = entry[4]
+                timestamp = entry[0]
 
                 if channel == -1: # Trigger / Bunch
                     with self.rate_lock:
@@ -219,7 +222,7 @@ class DAQSystem:
                             }
                              self.saver.add_event(record)
 
-                if channel == 1:
+                if channel == 2:
                     self.events_processed += 1
                     self.event_timestamps.append(timestamp)
 
@@ -244,7 +247,7 @@ class DAQSystem:
                         self.tof_buffer.append(entry[3]) # entry[3] is ToF
                         self.scanner.report_event(is_bunch=False)
 
-            time.sleep(0.005)
+            time.sleep(self.config["gui_settings"]["refresh_rate_ms"]/1000)
 
     def update_laser_settings(self, new_config: dict):
         """

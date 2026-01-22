@@ -1,5 +1,5 @@
 {
-    "simulation_mode": true,
+    "simulation_mode": false,
     "scan_settings": {
         "min_wn": 16666.0,
         "max_wn": 16680.0,

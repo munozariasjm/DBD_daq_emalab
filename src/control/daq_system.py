@@ -12,37 +12,63 @@ import json
 
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
-from src.simulation.sim_laser import MockLaser
+
 from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
 from src.control.laser_controller import LaserController
 from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
+
+# Real Hardware Imports
+from src.devices.tagger import Tagger
+from src.devices.laser import PIGCSDevice, EpicsClient
+from src.devices.sensors import Multimeter, SpectrometreReader, WavenumberReader
 
 class DAQSystem:
     def __init__(self, config=None):
         self.config = config or {}
         sim_config = self.config.get("simulation_settings", {})
 
-        # Hardware
-        self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
-
+        # Configuration extraction
         laser_sim_settings = sim_config.get("laser", {})
         epics_sim_settings = sim_config.get("epics", {})
-
         control_config = self.config.get("control_settings", {})
         laser_control_settings = control_config.get("laser", {})
 
-        self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
-        self.pi_device.SVO(1, 1) # Enable Servo for simulation
+        simulation_mode = self.config.get("simulation_mode", True)
+        print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
 
-        self.epics_client = MockEpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+        if simulation_mode:
+            # --- Simulation Mode ---
+            self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
 
-        # Initialize Controller
+            self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
+            self.pi_device.SVO(1, 1) # Enable Servo for simulation
+
+            self.epics_client = MockEpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+
+            self.multimeter = MockMultimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
+            self.spec_reader = MockSpectrometreReader()
+            self.wave_reader = MockWavenumberReader(source=None)
+
+        else:
+            # --- Real Hardware Mode ---
+            self.tagger = Tagger(initialization_params=sim_config.get("tagger", {}))
+
+            self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
+            # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
+
+            self.epics_client = EpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+
+            self.multimeter = Multimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
+            self.spec_reader = SpectrometreReader()
+            self.wave_reader = WavenumberReader(source=None)
+
+        # Initialize Controller (Shared Logic)
         self.laser = LaserController(self.pi_device, self.epics_client, config=laser_control_settings)
 
-        self.multimeter = MockMultimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
-        self.spec_reader = MockSpectrometreReader()
-        self.wave_reader = MockWavenumberReader(source=self.laser)
+        # Link reader source if needed
+        if hasattr(self.wave_reader, 'source'):
+             self.wave_reader.source = self.laser
 
         # Services
         self.saver = None
@@ -55,6 +81,11 @@ class DAQSystem:
 
         # Thread handles
         self.daq_thread = None
+
+        # Live Rate Counting
+        self.pending_events_count = 0
+        self.pending_bunches_count = 0
+        self.rate_lock = threading.Lock()
 
     def start(self):
         if self.running: return
@@ -103,10 +134,18 @@ class DAQSystem:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename_csv = f"data/scan_{timestamp}.csv"
         filename_meta = f"data/scan_{timestamp}_meta.json"
+        filename_final = f"data/final_scan_{timestamp}.csv"
 
-        self.saver = DataSaver(filename_csv)
+        data_settings = self.config.get("data_settings", {})
+        save_continuously = data_settings.get("save_continuously", True)
+
+        self.saver = DataSaver(
+            filename_csv,
+            save_continuously=save_continuously,
+            final_filename=filename_final
+        )
         self.saver.start()
-        print(f"[DAQ] Started logging to {filename_csv}")
+        print(f"[DAQ] Started logging to {filename_csv} (Continuous: {save_continuously})")
 
         # Save Metadata
         metadata = {
@@ -159,12 +198,33 @@ class DAQSystem:
                 timestamp = entry[4]
 
                 if channel == -1: # Trigger / Bunch
+                    with self.rate_lock:
+                         self.pending_bunches_count += 1
+
                     if self.scanner.is_accumulating:
                          self.scanner.report_event(is_bunch=True)
+
+                         # Save Bunch Record (captures context even if empty)
+                         if self.saver:
+                             record = {
+                                'timestamp': timestamp,
+                                'channel': channel,
+                                'tof': entry[3], # 0.0
+                                'voltage': current_voltage,
+                                'spectrum_peak': current_spec,
+                                'wavemeter_wn': current_wns[0],
+                                'laser_target_wn': self.scanner.current_wavenumber,
+                                'scan_bin_index': self.scanner.current_bin_index,
+                                'bunch_id': entry[0] # Global ID from tagger
+                            }
+                             self.saver.add_event(record)
 
                 if channel == 1:
                     self.events_processed += 1
                     self.event_timestamps.append(timestamp)
+
+                    with self.rate_lock:
+                         self.pending_events_count += 1
 
                     record = {
                         'timestamp': timestamp,
@@ -175,7 +235,7 @@ class DAQSystem:
                         'wavemeter_wn': current_wns[0], # Native cm^-1
                         'laser_target_wn': self.scanner.current_wavenumber,
                         'scan_bin_index': self.scanner.current_bin_index,
-                        'bunch_id': self.scanner.accumulated_bunches
+                        'bunch_id': entry[0] # Global ID from tagger
                     }
 
                     # Only save if accumulating AND saver is active
@@ -194,8 +254,19 @@ class DAQSystem:
              self.laser.update_config(new_config)
              print("[DAQ] Laser settings updated.")
 
+
     def get_instant_rate(self):
-        if len(self.event_timestamps) < 2: return 0.0
-        dt = self.event_timestamps[-1] - self.event_timestamps[0]
-        if dt <= 0: return 0.0
-        return len(self.event_timestamps) / dt
+        """
+        Returns the event rate in Events Per Bunch, averaged since the last call.
+        """
+        with self.rate_lock:
+             events = self.pending_events_count
+             bunches = self.pending_bunches_count
+
+             # Reset counters for next refresh
+             self.pending_events_count = 0
+             self.pending_bunches_count = 0
+
+        if bunches > 0:
+             return events / bunches
+        return 0.0

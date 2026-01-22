@@ -138,7 +138,7 @@ class Scanner(threading.Thread):
 
                 total_elapsed = time.time() - start_time
                 effective_duration = total_elapsed - self.bin_paused_duration
-                rate = self.accumulated_events / effective_duration if effective_duration > 0 else 0
+                rate = self.accumulated_events / self.accumulated_bunches if self.accumulated_bunches > 0 else 0
 
                 # Calculate average measured wavenumber for this bin
                 if self.bin_measured_wns:
@@ -146,8 +146,8 @@ class Scanner(threading.Thread):
                 else:
                     avg_wn = wn # Fallback to target
 
-                print(f"[Scanner] Bin {wn:.4f} cm^-1 (Avg Measured: {avg_wn:.4f} cm^-1) done. {self.accumulated_events} events, {self.accumulated_bunches} bunches in {effective_duration:.2f}s (effective) ({rate:.1f} cps)")
-                self.scan_progress.append((avg_wn, rate))
+                print(f"[Scanner] Bin {wn:.4f} cm^-1 (Avg Measured: {avg_wn:.4f} cm^-1) done. {self.accumulated_events} events, {self.accumulated_bunches} bunches in {effective_duration:.2f}s (effective) ({rate:.4f} epb)")
+                self.scan_progress.append((avg_wn, rate, self.accumulated_events, self.accumulated_bunches))
                 self.bins_completed += 1
             print("[Scanner] Scan complete.")
         except Exception as e:
@@ -204,7 +204,8 @@ class Scanner(threading.Thread):
             "eta_seconds": eta_seconds,
             "is_paused": not self.pause_event.is_set(),
             "is_stopping": self.stop_event.is_set(),
-            "is_running": self.running
+            "is_running": self.running,
+            "is_accumulating": self.is_accumulating
         }
 
     def stop(self, wait=True):

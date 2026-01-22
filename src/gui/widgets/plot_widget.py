@@ -9,7 +9,8 @@ class PlotWidget(QWidget):
         self.axes = {}
         self.lines = {}
         self.bars = {}
-        self.active_options = {'rate': True, 'scan': True, 'laser': False, 'volt': False, 'tof': False}
+        # Default options is now an ordered list
+        self.active_options = ['rate', 'scan']
         self.init_ui()
 
     def init_ui(self):
@@ -35,12 +36,16 @@ class PlotWidget(QWidget):
         self.bars = {}
 
         # Determine active plots from options dict
-        active_plots = []
-        if self.active_options.get('rate'): active_plots.append('rate')
-        if self.active_options.get('scan'): active_plots.append('scan')
-        if self.active_options.get('laser'): active_plots.append('laser')
-        if self.active_options.get('volt'): active_plots.append('volt')
-        if self.active_options.get('tof'): active_plots.append('tof')
+        # Determine active plots from options list
+        active_plots = self.active_options if isinstance(self.active_options, list) else []
+
+        # Fallback for old dict format (safety)
+        if isinstance(self.active_options, dict):
+             if self.active_options.get('rate'): active_plots.append('rate')
+             if self.active_options.get('scan'): active_plots.append('scan')
+             if self.active_options.get('laser'): active_plots.append('laser')
+             if self.active_options.get('volt'): active_plots.append('volt')
+             if self.active_options.get('tof'): active_plots.append('tof')
 
         num_plots = len(active_plots)
         if num_plots == 0:
@@ -53,13 +58,13 @@ class PlotWidget(QWidget):
 
             if name == 'rate':
                 ax.set_title("Total Event Rate")
-                ax.set_ylabel("CPS")
+                ax.set_ylabel("Events/Bunch")
                 self.lines['rate'], = ax.plot([], [], 'g-')
                 ax.grid(True)
             elif name == 'scan':
                 ax.set_title("Scan Results: Events/Bin")
                 ax.set_xlabel("Wavenumber (cm^-1)")
-                ax.set_ylabel("Rate (cps)")
+                ax.set_ylabel("Rate (Events/Bunch)")
                 self.lines['scan'], = ax.plot([], [], 'b-o')
                 self.lines['scan_cursor'], = ax.plot([], [], 'ro')
                 ax.grid(True)
@@ -104,15 +109,26 @@ class PlotWidget(QWidget):
         if 'scan' in self.lines:
             scan_data = history.get('scan_data', [])
             if scan_data:
-                wls, rates = zip(*scan_data)
+                wls, rates, _, _ = zip(*scan_data)
                 self.lines['scan'].set_data(wls, rates)
                 ax = self.axes['scan']
                 ax.set_xlim(min(wls)-0.1, max(wls)+0.1)
                 if rates:
                     ax.set_ylim(0, max(rates) * 1.2)
 
-            target_wn = history.get('target_wn', 0)
-            self.lines['scan_cursor'].set_data([target_wn], [0])
+            target_wn_list = history.get('target_wn', [])
+            current_target = target_wn_list[-1] if target_wn_list else 0
+            self.lines['scan_cursor'].set_data([current_target], [0])
+
+            # Update limits to include cursor
+            if scan_data and current_target > 0:
+                ax = self.axes['scan']
+                current_xlim = ax.get_xlim()
+                # Determine min/max including cursor
+                wls, _, _, _ = zip(*scan_data)
+                min_x = min(min(wls), current_target) - 0.5
+                max_x = max(max(wls), current_target) + 0.5
+                ax.set_xlim(min_x, max_x)
 
         # Laser
         if 'laser_curr' in self.lines:

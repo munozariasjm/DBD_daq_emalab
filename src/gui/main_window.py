@@ -68,7 +68,10 @@ class MainWindow(QMainWindow):
         # Timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_gui)
-        self.timer.start(100) # 10Hz
+
+        gui_settings = self.settings_manager.get_section("gui_settings")
+        refresh_interval = gui_settings.get("refresh_rate_ms", 100)
+        self.timer.start(refresh_interval)
 
         # Data Histories
         self.start_time = time.time()
@@ -187,7 +190,7 @@ class MainWindow(QMainWindow):
             try:
                 with open(path, 'w', newline='') as f:
                     writer = csv.writer(f)
-                    writer.writerow(["Wavenumber_cm-1", "Rate_cps"])
+                    writer.writerow(["Wavenumber_cm-1", "Rate_events_per_bunch", "Total_Events", "Total_Bunches"])
                     writer.writerows(scan_data)
                 QMessageBox.information(self, "Success", f"Exported {len(scan_data)} points.")
             except Exception as e:

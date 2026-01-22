@@ -20,7 +20,12 @@ class MockTagger:
 
         # Tracks the theoretical time of the last generated trigger
         # to ensure perfect 50Hz periodicity without drift.
+        # Tracks the theoretical time of the last generated trigger
+        # to ensure perfect 50Hz periodicity without drift.
         self.last_trigger_time = 0.0
+
+        # Global counter for bunches (packets)
+        self.global_packet_counter = 0
 
         print(f"[SIM] MockTagger initialized: {self.repetition_rate}Hz, Poisson(lambda={self.mean_events_per_bunch})")
 
@@ -80,7 +85,8 @@ class MockTagger:
 
             # --- Generate Trigger Event (Channel -1) ---
             # Format: [packet_num, events, channel, relative_time, absolute_time]
-            trigger_entry = [0, 0, -1, 0.0, trigger_ts]
+            self.global_packet_counter += 1
+            trigger_entry = [self.global_packet_counter, 0, -1, 0.0, trigger_ts]
             new_data.append(trigger_entry)
             new_triggers.append(trigger_entry)
 
@@ -115,7 +121,7 @@ class MockTagger:
                     channel = 1
                     absolute_ts = trigger_ts + delay
 
-                    event_entry = [0, 0, channel, delay, absolute_ts]
+                    event_entry = [self.global_packet_counter, 0, channel, delay, absolute_ts]
                     new_data.append(event_entry)
                     new_events.append(event_entry)
 
@@ -124,7 +130,6 @@ class MockTagger:
         return new_data
 
     # --- Dummy Methods to Satisfy Interface ---
-    # These prevent the GUI from crashing when it tries to configure the hardware.
     def set_trigger_level(self, level): pass
     def set_trigger_rising(self): pass
     def set_trigger_falling(self): pass

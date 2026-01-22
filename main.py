@@ -2,7 +2,7 @@ import sys
 import os
 from PyQt5.QtWidgets import QApplication
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 from src.utils.settings_manager import SettingsManager
 from src.control.daq_system import DAQSystem

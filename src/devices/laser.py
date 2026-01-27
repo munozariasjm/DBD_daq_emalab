@@ -1,72 +1,73 @@
+import xmlrpc.client
 from threading import Lock
+
+import os
+
+LAB_COMPUTER_IP = os.environ.get('LASER_SERVER_HOST', '192.168.1.XXX')
+LAB_COMPUTER_PORT = int(os.environ.get('LASER_SERVER_PORT', 8000))
+
+if os.environ.get('SIMULATION', '0') == '1':
+    LAB_COMPUTER_IP = 'localhost'
 
 class PIGCSDevice:
     """
-    Interface for the real PI GCS Device (Motor Controller).
-    Wraps pipython.GCSDevice.
+    Robust Remote Client. Connects to laser_server.py.
     """
     def __init__(self, controller_name='', initialization_params: dict = {}):
-        self.controller_name = controller_name
-        self.connected = False
         self.lock = Lock()
-        print(f"[HW] PIGCSDevice initialized (Controller: {controller_name})")
-        # TODO: self.gcs = GCSDevice(controller_name)
+        self.url = f"http://{LAB_COMPUTER_IP}:{LAB_COMPUTER_PORT}"
+
+        transport = xmlrpc.client.Transport()
+        self.proxy = xmlrpc.client.ServerProxy(self.url, transport=transport, allow_none=True)
+
+        print(f"[RemoteHW] Connected to Server at {self.url}")
+        self.connected = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.CloseConnection()
+        pass
 
     def ConnectRS232(self, comport, baudrate):
-        self.connected = True
-        print(f"[HW] PI Connected to COM{comport} @ {baudrate}")
-        # TODO: self.gcs.ConnectRS232(comport, baudrate)
-
-    def CloseConnection(self):
-        self.connected = False
-        print("[HW] PI Connection Closed.")
-        # TODO: self.gcs.CloseConnection()
+        print(f"[RemoteHW] (Server is handling RS232 connection on COM{comport})")
 
     def qIDN(self):
-        # TODO: return self.gcs.qIDN()
-        return "Physik Instrumente, REAL-HARDWARE-PLACEHOLDER"
+        with self.lock: return self.proxy.qIDN()
 
     def SVO(self, axis, state):
-        with self.lock:
-            print(f"[HW] PI Axis {axis} Servo {'ON' if state else 'OFF'}")
-            # TODO: self.gcs.SVO(axis, state)
+        pass
 
     def MOV(self, axis, target):
         with self.lock:
-            print(f"[HW] PI Move Axis {axis} to {target}")
-            # TODO: self.gcs.MOV(axis, target)
+            self.proxy.MOV(axis, float(target))
 
     def qPOS(self, axis=None):
+        """
+        Returns dictionary {axis: value} to match pipython behavior.
+        """
         with self.lock:
-            # TODO: return self.gcs.qPOS(axis)
-            if axis:
-                if isinstance(axis, list):
-                   return {a: 0.0 for a in axis}
-                return {axis: 0.0}
-            return {1: 0.0}
+            val = self.proxy.qPOS(axis)
+            return {axis: val} if axis else {1: val}
 
     def qVEL(self, axis):
-         with self.lock:
-             # TODO: return self.gcs.qVEL(axis)
-             return {axis: 0.0}
+        return {axis: 0.0}
+
+    def waitontarget(self, axis):
+        """
+        Blocks until the Server reports the axis has stopped moving.
+        Replaces 'pitools.waitontarget'.
+        """
+        with self.lock:
+            self.proxy.ServerWaitOnTarget(axis)
 
 
 class EpicsClient:
-    """
-    Interface for the real Epics Client.
-    Wraps epics.caget.
-    """
-    def __init__(self, pi_device, initialization_params: dict = {}):
-        self.pi_device = pi_device
-        print("[HW] EpicsClient initialized")
+    def __init__(self, pi_device, initialization_params={}):
+        self.pi = pi_device
 
     def caget(self, pvname):
-        print(f"[HW] Epics caget: {pvname}")
-        # TODO: import epics; return epics.caget(pvname)
-        return 0.0
+        try:
+            return self.pi.proxy.get_epics_wn(pvname)
+        except:
+            return 0.0

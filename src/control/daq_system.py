@@ -182,6 +182,7 @@ class DAQSystem:
         self.scanner.start()
 
     def _daq_loop(self):
+        previous_bunch=-1
         while self.running:
             # Check if scanner finished naturally to stop saver
             if self.saver and not self.scanner.running:
@@ -190,6 +191,7 @@ class DAQSystem:
                 self.saver = None
 
             data = self.tagger.get_data()
+            # print(data)
 
             # Latest sensors
             current_voltage = self.multimeter.get_voltage()
@@ -200,7 +202,7 @@ class DAQSystem:
                 channel = entry[2]
                 timestamp = entry[0]
 
-                if channel == -1: # Trigger / Bunch
+                if channel == -1: # Empty Bunch
                     with self.rate_lock:
                          self.pending_bunches_count += 1
 
@@ -228,6 +230,9 @@ class DAQSystem:
 
                     with self.rate_lock:
                          self.pending_events_count += 1
+                         if entry[0] != previous_bunch:
+                            self.pending_bunches_count += 1
+                            previous_bunch = entry[0]
 
                     record = {
                         'timestamp': timestamp,
@@ -246,6 +251,9 @@ class DAQSystem:
                         self.saver.add_event(record)
                         self.tof_buffer.append(entry[3]) # entry[3] is ToF
                         self.scanner.report_event(is_bunch=False)
+                        if entry[0] != previous_bunch2:
+                            self.scanner.report_event(is_bunch=True)
+                            previous_bunch2 = entry[0]
 
             time.sleep(self.config["gui_settings"]["refresh_rate_ms"]/1000)
 
@@ -271,5 +279,5 @@ class DAQSystem:
              self.pending_bunches_count = 0
 
         if bunches > 0:
-             return events / bunches
+            return events / bunches
         return 0.0

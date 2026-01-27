@@ -146,7 +146,7 @@ class Scanner(threading.Thread):
                 else:
                     avg_wn = wn # Fallback to target
 
-                print(f"[Scanner] Bin {wn:.4f} cm^-1 (Avg Measured: {avg_wn:.4f} cm^-1) done. {self.accumulated_events} events, {self.accumulated_bunches} bunches in {effective_duration:.2f}s (effective) ({rate:.4f} epb)")
+                print(f"[Scanner] Bin {wn:.6f} cm^-1 (Avg Measured: {avg_wn:.6f} cm^-1) done. {self.accumulated_events} events, {self.accumulated_bunches} bunches in {effective_duration:.2f}s (effective) ({rate:.4f} epb)")
                 self.scan_progress.append((avg_wn, rate, self.accumulated_events, self.accumulated_bunches))
                 self.bins_completed += 1
             print("[Scanner] Scan complete.")

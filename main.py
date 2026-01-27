@@ -9,11 +9,13 @@ from src.control.daq_system import DAQSystem
 from src.gui.main_window import MainWindow
 
 if __name__ == "__main__":
+    print("*"*50)
     app = QApplication(sys.argv)
 
     # Settings & DAQ Logic
     settings_manager = SettingsManager()
     settings = settings_manager.settings
+    print(settings)
 
     daq = DAQSystem(config=settings)
     daq.start()

@@ -1,76 +1,114 @@
 import threading
+import serial
 import time
+import epics
+from epics import PV
+global wavenumbers_pvs
 
-class Multimeter:
-    """
-    Interface for the real HP34401A Multimeter.
-    """
-    def __init__(self, port, initialization_params: dict = {}):
-        self.port = port
-        print(f"[HW] Multimeter initialized on {port}")
-        # TODO: Setup serial connection
+wavenumbers_pv_names = ["LaserLab:wavenumber_1", "LaserLab:wavenumber_2", "LaserLab:wavenumber_3", "LaserLab:wavenumber_4"]
 
+wavenumbers_pvs = [PV(name) for name in wavenumbers_pv_names]
+
+
+class HP_Multimeter:
+    def __init__(self, port):
+        self.device = serial.Serial(port, baudrate=9600, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_TWO, timeout=1)
+        self.reset()
+        time.sleep(0.25)
+        self.setRemote()
+        time.sleep(0.25)
+    
     def reset(self):
-        print("[HW] Multimeter Reset")
-
+        self.device.write(b'*RST\n')
+        self.device.readline()
+    
     def setRemote(self):
-        print("[HW] Multimeter set to REMOTE mode")
-
+        self.device.write(b'SYSTEM:REMOTE\n')
+        self.device.readline()
+    
     def identity(self):
-        return b"HEWLETT-PACKARD,34401A,REAL-HW,VER-1.0"
-
+        self.device.write(b'*IDN?\n')
+        response = self.device.readline()
+        return response
+    
     def getVoltage(self):
-        # TODO: Read from serial
-        return 0.0
+        self.device.write(b"MEAS:VOLT:DC?\n")
+        try:
+            response = self.device.readline().decode('utf-8').strip('\r\n')
+            response = float(response)
+        except Exception as expn:
+            print('uh oh, exception occurred reading the voltage', expn)
+            response = 0.0
+        return response
+    
+class VoltageReader(threading.Thread):
+    def __init__(self, multimeter, refresh_rate=0.5):
+        super().__init__()
+        self.multimeter = multimeter
+        self.refresh_rate = refresh_rate
+        self.voltage = 0.0
+        self.stop_event = threading.Event()
 
+    def run(self):
+        while not self.stop_event.is_set():
+            try:
+                self.voltage = self.multimeter.getVoltage()
+                time.sleep(self.refresh_rate)
+            except Exception as expn:
+                self.voltage = -69419.999999999999
+                time.sleep(self.refresh_rate)
+                
+    
+    def stop(self):
+        self.stop_event.set()
+    
+    def get_voltage(self):
+        return self.voltage
 
 class SpectrometreReader(threading.Thread):
     """
     Interface for the real Spectrometer Reader.
     """
-    def __init__(self, refresh_rate=0.0005):
+    def __init__(self, refresh_rate=0.2):
         super().__init__()
         self.refresh_rate = refresh_rate
-        self.spectrum = 0.0
+        self.spectrum = None
+        self.pv_name = "LaserLab:spectrum_peak"
         self.stop_event = threading.Event()
-        print("[HW] SpectrometreReader initialized")
 
     def run(self):
         while not self.stop_event.is_set():
             self.spectrum = self.get_spec()
             time.sleep(self.refresh_rate)
-
+    
     def stop(self):
         self.stop_event.set()
+    
+    def get_spec(self):
+        try:
+            spec = epics.caget(self.pv_name)
+            spec = float(spec) if spec is not None else 0.00
+            return spec
+        except Exception as e:
+            print(f"Error getting spectrum: {e}")
+            print("Spectrum Disconnected!:", spec)
+            
+            return 0.00
 
-    def get_spec(self, patience=0.1, max_tries=10):
-        # TODO: Get real spectrum peak
-        return 0.0
-
-
-class WavenumberReader(threading.Thread):
+class WavenumberReader:
     """
     Interface for the real Wavemeter Reader.
     """
-    def __init__(self, refresh_rate=0.0005, source=None):
+    def __init__(self):
         super().__init__()
-        self.refresh_rate = refresh_rate
-        self.source = source
         self.wavenumbers = [0.0, 0.0, 0.0, 0.0]
-        self.stop_event = threading.Event()
-        print("[HW] WavenumberReader initialized")
-
-    def run(self):
-        while not self.stop_event.is_set():
-            self.wavenumbers = [self.get_wnum(i) for i in range(1, 5)]
-            time.sleep(self.refresh_rate)
-
-    def stop(self):
-        self.stop_event.set()
 
     def get_wnum(self, i=1):
-        # TODO: Read from Wavemeter IOC/PV
-        return 0.0
-
+        try:
+            return round(float(wavenumbers_pvs[i - 1].get()), 5)
+        except Exception as e:
+            # print(f"Error getting wavenumber: {e}")
+            return 0.00000
+        
     def get_wavenumbers(self):
-        return self.wavenumbers
+        return [self.get_wnum(k) for k in range(1,5)]

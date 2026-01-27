@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
         target_wn = status['target_wn']
         measured_wn = status['measured_wn']
 
-        volt_val = self.daq.multimeter.getVoltage()
+        volt_val = self.daq.multimeter.get_voltage()
 
         self.time_history.append(current_time)
         self.rate_history.append(rate)

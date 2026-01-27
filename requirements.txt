@@ -1,5 +1,5 @@
 numpy
 matplotlib
 PyQt5
-# pipython
-# pyepics
+pipython
+pyepics

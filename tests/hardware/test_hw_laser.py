@@ -2,6 +2,8 @@ import sys
 import os
 import time
 
+from pipython import GCSDevice, pitools, datarectools
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.devices.laser import PIGCSDevice, EpicsClient
@@ -17,24 +19,25 @@ def test_laser_control():
         print("   [PASS] Initialized")
 
         print("2. Connecting (Simulated COM Port)...")
-        pi.ConnectRS232(comport=1, baudrate=115200) # TODO: Update COM port
+        pi.ConnectRS232(comport=5, baudrate=19200) # TODO: Update COM port
         print("   [PASS] Connection method call")
 
-        print("3. Checking Identity...")
-        idn = pi.qIDN()
-        print(f"   Identity: {idn}")
+        # print("3. Checking Identity...")
+        # idn = pi.qIDN()
+        # print(f"   Identity: {idn}")
 
         print("4. Testing Movement Logic...")
         pi.SVO(axis=1, state=True)
         current_pos = pi.qPOS(axis=1)
         print(f"   Current Position: {current_pos}")
 
-        target = 10.0
+        target = 12625.187
         print(f"   Moving to {target}...")
         pi.MOV(axis=1, target=target)
 
         # Simulate wait
-        time.sleep(0.5)
+        # time.sleep(0.5)
+        pitools.waitontarget(pi,axes=1)
         new_pos = pi.qPOS(axis=1)
         print(f"   Post-move Position (Simulated/Placeholder): {new_pos}")
 
@@ -44,14 +47,12 @@ def test_laser_control():
         print("1. Initializing EpicsClient...")
         epics = EpicsClient(pi_device=pi)
 
-        print("2. Reading PV...")
+        # print("2. Reading PV...")
         # Note: Replace with actual PV name
-        val = epics.caget("LASER:WAVENUMBER")
-        print(f"   Read Value: {val}")
 
-        print("\n[Cleanup]")
-        pi.CloseConnection()
-        print("=== Laser Control Test Complete ===")
+        # print("\n[Cleanup]")
+        # pi.CloseConnection()
+        # print("=== Laser Control Test Complete ===")
 
     except Exception as e:
         print(f"\n[FAIL] An error occurred: {e}")

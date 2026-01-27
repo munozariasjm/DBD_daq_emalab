@@ -7,9 +7,6 @@ from collections import deque
 import csv
 import json
 
-# Add src to python path if needed, though usually handled by entry point
-# But internal imports should work if run as module or with correct path
-
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
 
@@ -19,7 +16,7 @@ from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
 
 # Real Hardware Imports
-# from src.devices.tagger import Tagger
+from src.devices.tagger import Tagger
 from src.devices.laser import PIGCSDevice, EpicsClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 

@@ -26,7 +26,8 @@ class ParamsWidget(QWidget):
         self.spin_min_wn = QDoubleSpinBox()
         self.spin_min_wn.setRange(0, 50000)
         self.spin_min_wn.setValue(defaults.get("min_wn", 16666.0))
-        self.spin_min_wn.setDecimals(2)
+        self.spin_min_wn.setDecimals(6)
+        self.spin_min_wn.setSingleStep(0.000001)
         layout_params.addWidget(self.spin_min_wn, 0, 1)
 
         # Max WN
@@ -34,15 +35,17 @@ class ParamsWidget(QWidget):
         self.spin_max_wn = QDoubleSpinBox()
         self.spin_max_wn.setRange(0, 50000)
         self.spin_max_wn.setValue(defaults.get("max_wn", 16680.0))
-        self.spin_max_wn.setDecimals(2)
+        self.spin_max_wn.setDecimals(6)
+        self.spin_max_wn.setSingleStep(0.000001)
         layout_params.addWidget(self.spin_max_wn, 1, 1)
 
         # Step
         layout_params.addWidget(QLabel("Step Size (cm^-1):"), 2, 0)
         self.spin_step = QDoubleSpinBox()
-        self.spin_step.setRange(0.01, 1000)
+        self.spin_step.setRange(0.000001, 1000)
         self.spin_step.setValue(defaults.get("step_size", 0.5))
-        self.spin_step.setDecimals(2)
+        self.spin_step.setDecimals(6)
+        self.spin_step.setSingleStep(0.000001)
         layout_params.addWidget(self.spin_step, 2, 1)
 
         # Stop Mode
@@ -95,9 +98,9 @@ class ParamsWidget(QWidget):
             'stop_val': stop_val,
             # For display/tooltip
             'display': {
-                "Min WN": f"{min_wn:.2f} cm^-1",
-                "Max WN": f"{max_wn:.2f} cm^-1",
-                "Step": f"{step_size:.2f} cm^-1",
+                "Min WN": f"{min_wn:.6f} cm^-1",
+                "Max WN": f"{max_wn:.6f} cm^-1",
+                "Step": f"{step_size:.6f} cm^-1",
                 "Mode": stop_mode,
                 "Value": f"{stop_val}"
             }

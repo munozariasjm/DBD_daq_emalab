@@ -24,7 +24,6 @@ class MockMultimeter:
         return b"HEWLETT-PACKARD,34401A,SIMULATED,VER-2.0"
 
     def getVoltage(self):
-        # Generate a sine wave oscillating between 0.5V and 4.5V with noise
         elapsed = time.time() - self.start_time
         base_signal = 2.5 + 2.0 * math.sin(elapsed * 0.5)
         noise = random.uniform(-self.noise_level, self.noise_level)
@@ -61,13 +60,11 @@ class MockSpectrometreReader(threading.Thread):
         self.stop_event.set()
 
     def get_spec(self, patience=0.1, max_tries=10):
-        # Simulate a peak drifting slowly around 600.0 nm
         drift = math.sin(time.time() / 10.0) * 2.0
         jitter = random.uniform(-0.1, 0.1)
-        return round(600.0 + drift + jitter, 4)
+        return round(16666.6 + drift + jitter, 6)
 
 
-# --- Mock Wavemeter Reader ---
 class MockWavenumberReader(threading.Thread):
     """
     Simulates the EPICS Wavemeter Reader.
@@ -83,7 +80,6 @@ class MockWavenumberReader(threading.Thread):
 
     def run(self):
         while not self.stop_event.is_set():
-            # Update all 4 channels
             self.wavenumbers = [self.get_wnum(i) for i in range(1, 5)]
             time.sleep(self.refresh_rate)
 
@@ -91,10 +87,7 @@ class MockWavenumberReader(threading.Thread):
         self.stop_event.set()
 
     def get_wnum(self, i=1):
-        # Simulate realistic wavenumbers for visible range (~600 nm)
-        # 600 nm -> 16666.6 cm^-1
         if i == 1 and self.source:
-            # Measure the source!
             if hasattr(self.source, 'get_wavenumber'):
                 base = self.source.get_wavenumber()
             elif hasattr(self.source, 'get_wavelength'):
@@ -109,7 +102,7 @@ class MockWavenumberReader(threading.Thread):
             base = 16666.6 + (i-1) * 1000.0
 
         noise = random.uniform(-0.05, 0.05)
-        return round(base + noise, 4)
+        return round(base + noise, 6)
 
     def get_wavenumbers(self):
         return self.wavenumbers

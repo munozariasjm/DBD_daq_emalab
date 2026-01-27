@@ -9,7 +9,6 @@ class PlotWidget(QWidget):
         self.axes = {}
         self.lines = {}
         self.bars = {}
-        # Default options is now an ordered list
         self.active_options = ['rate', 'scan']
         self.init_ui()
 
@@ -35,11 +34,8 @@ class PlotWidget(QWidget):
         self.lines = {}
         self.bars = {}
 
-        # Determine active plots from options dict
-        # Determine active plots from options list
         active_plots = self.active_options if isinstance(self.active_options, list) else []
 
-        # Fallback for old dict format (safety)
         if isinstance(self.active_options, dict):
              if self.active_options.get('rate'): active_plots.append('rate')
              if self.active_options.get('scan'): active_plots.append('scan')
@@ -92,7 +88,6 @@ class PlotWidget(QWidget):
         self.canvas.draw()
 
     def update_plots(self, history):
-        # history is a dict containing the deque lists
         times = history.get('times', [])
         if not times: return
 
@@ -103,7 +98,7 @@ class PlotWidget(QWidget):
             ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
             valid_rates = [r for r in history['rate'] if r is not None]
             if valid_rates:
-                ax.set_ylim(0, max(max(valid_rates), 10) * 1.2)
+                ax.set_ylim(0, max(max(valid_rates), 1.0) * 1.2)
 
         # Scan
         if 'scan' in self.lines:
@@ -114,23 +109,20 @@ class PlotWidget(QWidget):
                 ax = self.axes['scan']
                 ax.set_xlim(min(wls)-0.1, max(wls)+0.1)
                 if rates:
-                    ax.set_ylim(0, max(rates) * 1.2)
+                    ax.set_ylim(0, max(max(rates), 1.0) * 1.2)
 
             target_wn_list = history.get('target_wn', [])
             current_target = target_wn_list[-1] if target_wn_list else 0
             self.lines['scan_cursor'].set_data([current_target], [0])
 
-            # Update limits to include cursor
             if scan_data and current_target > 0:
                 ax = self.axes['scan']
                 current_xlim = ax.get_xlim()
-                # Determine min/max including cursor
                 wls, _, _, _ = zip(*scan_data)
                 min_x = min(min(wls), current_target) - 0.5
                 max_x = max(max(wls), current_target) + 0.5
                 ax.set_xlim(min_x, max_x)
 
-        # Laser
         if 'laser_curr' in self.lines:
             self.lines['laser_curr'].set_data(times, history['wn'])
             self.lines['laser_target'].set_data(times, history['target_wn'])
@@ -144,7 +136,6 @@ class PlotWidget(QWidget):
                 if span < 0.1: span = 1.0
                 ax.set_ylim(min_y - span*0.2, max_y + span*0.2)
 
-        # Volt
         if 'volt' in self.lines:
             self.lines['volt'].set_data(times, history['volt'])
             ax = self.axes['volt']
@@ -156,11 +147,9 @@ class PlotWidget(QWidget):
                 if v_span < 0.1: v_span = 0.1
                 ax.set_ylim(min_v - v_span*0.2, max_v + v_span*0.2)
 
-        # ToF
         if 'tof' in self.lines:
             tof_data = history.get('tof_buffer', [])
             if tof_data and len(tof_data) > 0:
-                # Compute histogram
                 counts, bin_edges = np.histogram(tof_data, bins=50, density=True)
                 centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 

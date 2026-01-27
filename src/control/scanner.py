@@ -26,7 +26,8 @@ class Scanner(threading.Thread):
         self.accumulated_events = 0
         self.accumulated_bunches = 0
         self.is_accumulating = False # If True, we are in the "Measurement" phase
-
+        self.wavechannel =  3 
+         
         # Results (for plotting)
         self.scan_progress = []
 
@@ -95,7 +96,7 @@ class Scanner(threading.Thread):
                 while not self.laser.is_stable():
                     if self.stop_event.is_set(): return
                     self.wait_for_pause()
-                    time.sleep(0.05)
+                    time.sleep(0.2)
 
                 # 3. Start Accumulating
                 self.accumulated_events = 0
@@ -128,8 +129,8 @@ class Scanner(threading.Thread):
                     # Track Measured Wavenumber
                     if self.wavemeter:
                         wn_status = self.wavemeter.get_wavenumbers()
-                        if wn_status and wn_status[0] > 0:
-                            self.bin_measured_wns.append(wn_status[0])
+                        if wn_status and wn_status[int(self.wavechannel-1)] > 0:
+                            self.bin_measured_wns.append(wn_status[int(self.wavechannel-1)])
 
                     time.sleep(0.005)
 
@@ -188,8 +189,8 @@ class Scanner(threading.Thread):
         measured_wn = 0.0
         if self.wavemeter:
             wns = self.wavemeter.get_wavenumbers()
-            if wns and wns[0] > 0:
-                measured_wn = wns[0]
+            if wns and wns[int(self.wavechannel-1)] > 0:
+                measured_wn = wns[int(self.wavechannel-1)]
 
         return {
             "target_wn": self.current_wavenumber,

@@ -15,7 +15,7 @@ class SettingsManager:
         "gui_settings": {
             "window_width": 1200,
             "window_height": 800,
-            "refresh_rate_ms": 100
+            "refresh_rate_ms": 500
         },
         "data_settings": {
             "default_save_dir": "data",

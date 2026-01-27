@@ -17,14 +17,15 @@ from src.control.scanner import Scanner
 
 # Real Hardware Imports
 from src.devices.tagger import Tagger
-from src.devices.laser import PIGCSDevice, EpicsClient
+from src.devices.laser import PIGCSDevice, ComClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
 class DAQSystem:
     def __init__(self, config=None):
         self.config = config or {}
         sim_config = self.config.get("simulation_settings", {})
-
+        
+        self.wavechannel = 3
         # Configuration extraction
         laser_sim_settings = sim_config.get("laser", {})
         epics_sim_settings = sim_config.get("epics", {})
@@ -53,13 +54,13 @@ class DAQSystem:
             self.tagger = Tagger(index=0)
 
             # SIMULATING MOTOR FOR NOW
-            #self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
+            self.pi_device = PIGCSDevice("ANYTHING")#, initialization_params=laser_sim_settings)
             # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
 
-            self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
-            self.pi_device.SVO(1, 1) # Enable Servo for simulation
+            # self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
+            # self.pi_device.SVO(1, 1) # Enable Servo for simulation
 
-            self.epics_client = EpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+            self.epics_client = ComClient(self.pi_device, initialization_params=epics_sim_settings)
 
             self.hp_multimeter = HP_Multimeter(port="COM16")#, initialization_params=sim_config.get("multimeter", {}))
             self.multimeter = VoltageReader(self.hp_multimeter)
@@ -180,6 +181,7 @@ class DAQSystem:
 
     def _daq_loop(self):
         previous_bunch=-1
+        previous_bunch2=-1
         while self.running:
             # Check if scanner finished naturally to stop saver
             if self.saver and not self.scanner.running:
@@ -214,7 +216,7 @@ class DAQSystem:
                                 'tof': entry[3], # 0.0
                                 'voltage': current_voltage,
                                 'spectrum_peak': current_spec,
-                                'wavemeter_wn': current_wns[0],
+                                'wavemeter_wn': current_wns[int(self.wavechannel-1)],
                                 'laser_target_wn': self.scanner.current_wavenumber,
                                 'scan_bin_index': self.scanner.current_bin_index,
                                 'bunch_id': entry[0] # Global ID from tagger
@@ -237,7 +239,7 @@ class DAQSystem:
                         'tof': entry[3],
                         'voltage': current_voltage,
                         'spectrum_peak': current_spec,
-                        'wavemeter_wn': current_wns[0], # Native cm^-1
+                        'wavemeter_wn': current_wns[int(self.wavechannel-1)], # Native cm^-1
                         'laser_target_wn': self.scanner.current_wavenumber,
                         'scan_bin_index': self.scanner.current_bin_index,
                         'bunch_id': entry[0] # Global ID from tagger

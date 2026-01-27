@@ -30,6 +30,14 @@ class MockMultimeter:
         noise = random.uniform(-self.noise_level, self.noise_level)
         return round(base_signal + noise, 5)
 
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def get_voltage(self):
+        return self.getVoltage()
 
 class MockSpectrometreReader(threading.Thread):
     """

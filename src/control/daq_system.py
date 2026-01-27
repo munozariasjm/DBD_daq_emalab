@@ -19,7 +19,7 @@ from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
 
 # Real Hardware Imports
-from src.devices.tagger import Tagger
+# from src.devices.tagger import Tagger
 from src.devices.laser import PIGCSDevice, EpicsClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
@@ -58,7 +58,7 @@ class DAQSystem:
             # SIMULATING MOTOR FOR NOW
             #self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
             # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
-            
+
             self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
             self.pi_device.SVO(1, 1) # Enable Servo for simulation
 

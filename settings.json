@@ -29,7 +29,7 @@
             "noise_level": 0.05
         }
     },
-    "simulation_mode": false,
+    "simulation_mode": true,
     "control_settings": {
         "laser": {
             "tolerance": 0.1,

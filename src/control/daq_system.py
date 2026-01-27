@@ -7,9 +7,6 @@ from collections import deque
 import csv
 import json
 
-# Add src to python path if needed, though usually handled by entry point
-# But internal imports should work if run as module or with correct path
-
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
 
@@ -58,7 +55,7 @@ class DAQSystem:
             # SIMULATING MOTOR FOR NOW
             #self.pi_device = PIGCSDevice("Real_PI", initialization_params=laser_sim_settings)
             # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
-            
+
             self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
             self.pi_device.SVO(1, 1) # Enable Servo for simulation
 

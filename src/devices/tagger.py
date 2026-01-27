@@ -116,7 +116,7 @@ class Tagger:
             print('status is 1. Better luck next time')
             if return_splitted:
                 return [], [], []
-            return []       
+            return []
         else:
             raise ValueError
 

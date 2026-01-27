@@ -79,7 +79,7 @@ class StatusWidget(QWidget):
         target_wn = daq_status['target_wn']
         measured_wn = daq_status['measured_wn']
 
-        self.lbl_status_wn.setText(f"Measured: {measured_wn:.4f} cm^-1\nTarget: {target_wn:.4f} cm^-1")
+        self.lbl_status_wn.setText(f"Measured: {measured_wn:.6f} cm^-1\nTarget: {target_wn:.6f} cm^-1")
 
         if active_params_text:
              self.lbl_scan_info.setToolTip(active_params_text)
@@ -92,20 +92,6 @@ class StatusWidget(QWidget):
             else:
                 self.lbl_progress.setText(f"Status: Scanning Bin {daq_status['bin_index']}/{daq_status['total_bins']}")
 
-            # 3 States:
-            # 1. Off/Idle -> Red (handled in else block below)
-            # 2. Accumulating (Ingesting) -> Green
-            # 3. Moving/Converging -> Yellow
-
-            # We need to distinguish between Accumulating and Moving.
-            # DAQ Status doesn't explicitly say "Moving", but if running and NOT accumulating, we are moving/stabilizing.
-            # Or we can check if bin_progress is moving?
-
-            # Check 'is_accumulating' from scanner state?
-            # The update_status method receives a dict 'daq_status' which comes from get_status() in Scanner.
-            # We need to ensure 'accumulating' flag is in there. Assuming it is or we add it to scanner.
-
-            # Let's check scanner.py get_status
             is_accumulating = daq_status.get('is_accumulating', False)
             if is_accumulating:
                  self.led.set_color("green") # Ingesting
@@ -125,7 +111,6 @@ class StatusWidget(QWidget):
                 pct = int((daq_status['bins_completed'] / daq_status['total_bins']) * 100)
                 self.progress_bar.setValue(pct)
 
-            # Bin Progress
             if daq_status['stop_value'] > 0:
                 if daq_status['stop_mode'] == 'events':
                      bin_pct = (daq_status['accumulated'] / daq_status['stop_value']) * 100

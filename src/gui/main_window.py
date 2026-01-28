@@ -93,9 +93,13 @@ class MainWindow(QMainWindow):
 
         # Plot Options connection
         self.plot_options_widget.options_changed.connect(self.plot_widget.set_active_plots)
-        self.plot_options_widget.options_changed.connect(self.plot_widget.set_active_plots)
+        self.plot_options_widget.auto_scale_toggled.connect(self.plot_widget.set_auto_scale)
+
         # Initialize plot widget with default options
         self.plot_widget.set_active_plots(self.plot_options_widget.get_options())
+        # We manually check the state or default true? OptionsWidget defaults to True, Widget defaults to True.
+        # Ideally we sync them.
+        self.plot_widget.set_auto_scale(self.plot_options_widget.chk_auto_scale.isChecked())
 
     def on_start(self):
         status = self.daq.scanner.get_status()

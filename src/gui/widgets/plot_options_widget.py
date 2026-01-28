@@ -1,9 +1,10 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QListWidget, QListWidgetItem, QAbstractItemView)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QListWidget, QListWidgetItem, QAbstractItemView, QCheckBox, QLabel)
 from PyQt5.QtCore import pyqtSignal, Qt
 
 class PlotOptionsWidget(QWidget):
     # Signal now emits ordered list of active plot keys
     options_changed = pyqtSignal(list)
+    auto_scale_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -14,10 +15,19 @@ class PlotOptionsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        grp_opts = QGroupBox("Plot Options (Drag to Reorder)")
+        grp_opts = QGroupBox("Plot Options")
         layout_opts = QVBoxLayout()
         grp_opts.setLayout(layout_opts)
 
+        # Auto-Scale Checkbox
+        from PyQt5.QtWidgets import QCheckBox
+        self.chk_auto_scale = QCheckBox("Lock/Auto-Scale Axes")
+        self.chk_auto_scale.setChecked(True)
+        self.chk_auto_scale.toggled.connect(self.auto_scale_toggled.emit)
+        layout_opts.addWidget(self.chk_auto_scale)
+
+        # List Widget
+        layout_opts.addWidget(QLabel("Drag to Reorder:")) # Import QLabel if needed or just use string
         self.list_widget = QListWidget()
         self.list_widget.setDragDropMode(QAbstractItemView.InternalMove)
         self.list_widget.model().rowsMoved.connect(self.emit_options)

@@ -69,8 +69,7 @@ class LaserController:
         """
         Returns the current wavenumber from EPICS.
         """
-        channel = self.config.get("wavechannel", 1)
-        return float(self.epics.caget(f'LaserLab:wavenumber_{channel}'))
+        return float(self.epics.caget('LaserLab:wavenumber_1'))
 
     def is_stable(self, tolerance=None):
         """
@@ -125,7 +124,7 @@ class LaserController:
             step_coarse = self.step_coarse
             move_cmd = 0.0
 
-            if wn <= self.target_wn - self.tolerance:
+            if wn >= self.target_wn + self.tolerance:
                 # Need to increase WN
                 if abs((position + step_fine) - prevpos) > 1e-9:
                         move_cmd = position + step_fine

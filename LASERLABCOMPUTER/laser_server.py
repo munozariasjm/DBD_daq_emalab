@@ -1,5 +1,7 @@
 import os
 import sys
+import threading
+import time
 from xmlrpc.server import SimpleXMLRPCServer
 from socketserver import ThreadingMixIn
 import pylablib as pll
@@ -33,6 +35,7 @@ class ThreadedXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
 
 class LaserServerInterface:
     def __init__(self):
+        self.lock = threading.Lock()
         print(f"[Server] Initializing {CONTROLLERNAME}...")
         if SIMULATION:
             self.pi = get_mock_device()
@@ -55,8 +58,9 @@ class LaserServerInterface:
     def MOV(self, axis, target):
         print(f"[CMD] MOV Axis {axis} -> {target}")
         try:
-            self.pi.MOV(axis, float(target))
-            time.sleep(0.1) # Critical: Small pause
+            with self.lock:
+                self.pi.MOV(axis, float(target))
+                time.sleep(0.1) # Critical: Small pause
             return True
         except Exception as e:
             print(f"Hardware Error in MOV: {e}")
@@ -64,8 +68,9 @@ class LaserServerInterface:
 
     def qPOS(self, axis):
         try:
-            val = self.pi.qPOS(axis)[axis]
-            time.sleep(0.1) # Critical: Small pause after serial talk
+            with self.lock:
+                val = self.pi.qPOS(axis)[axis]
+                time.sleep(0.1) # Critical: Small pause after serial talk
             return float(val)
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")

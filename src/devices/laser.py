@@ -19,33 +19,29 @@ import xmlrpc.client
 class PIGCSDevice:
     def __init__(self, controller_name='', initialization_params: dict = {}):
         self.url = f"http://{LAB_COMPUTER_IP}:{LAB_COMPUTER_PORT}"
-        # This is the secret sauce: thread-local storage
-        self._local = threading.local()
-        print(f"[RemoteHW] Initialized thread-safe storage for {self.url}")
+        self.lock = Lock()
 
-    @property
-    def proxy(self):
-        # Every thread that accesses 'self.proxy' gets its own instance
-        if not hasattr(self._local, 'instance'):
-            self._local.instance = xmlrpc.client.ServerProxy(
-                self.url,
-                allow_none=True,
-                use_builtin_types=True
-            )
-        return self._local.instance
+        self.proxy = xmlrpc.client.ServerProxy(
+            self.url,
+            allow_none=True,
+            use_builtin_types=True
+        )
+        print(f"[RemoteHW] Connected to persistent server proxy at {self.url}")
 
     def MOV(self, axis, target):
-        return self.proxy.MOV(axis, float(target))
+        with self.lock:
+             return self.proxy.MOV(axis, float(target))
 
     def qPOS(self, axis=None):
-        val = self.proxy.qPOS(axis)
+        with self.lock:
+            val = self.proxy.qPOS(axis)
         return {axis: val} if axis else {1: val}
 
     def waitontarget(self, axis):
-        return self.proxy.ServerWaitOnTarget(axis)
+        with self.lock:
+            return self.proxy.ServerWaitOnTarget(axis)
 
     def SVO(self, axis, state):
-        # If your code calls SVO, make sure it's handled or mocked
         pass
 
 # class PIGCSDevice:

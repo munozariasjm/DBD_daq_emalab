@@ -35,12 +35,10 @@ class DAQSystem:
         simulation_mode = self.config.get("simulation_mode", True)
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
 
-        if simulation_mode:
-            # --- Simulation Mode ---
+        if simulation_mode: # Simulation Mode
             self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
 
             self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
-            self.pi_device.SVO(1, 1) # Enable Servo for simulation
 
             self.epics_client = MockEpicsClient(self.pi_device, initialization_params=epics_sim_settings)
 
@@ -48,17 +46,14 @@ class DAQSystem:
             self.spec_reader = MockSpectrometreReader()
             self.wave_reader = MockWavenumberReader(source=None)
 
-        else:
-            # --- Real Hardware Mode ---
+        else: # Real Hardware
             print("Using real ")
             self.tagger = Tagger(index=0)
 
-            # SIMULATING MOTOR FOR NOW
-            self.pi_device = PIGCSDevice("ANYTHING")#, initialization_params=laser_sim_settings)
-
+            self.pi_device = PIGCSDevice("PI")
             self.epics_client = ComClient(self.pi_device, initialization_params=epics_sim_settings)
 
-            self.hp_multimeter = HP_Multimeter(port="COM16")#, initialization_params=sim_config.get("multimeter", {}))
+            self.hp_multimeter = HP_Multimeter(port="COM16")
             self.multimeter = VoltageReader(self.hp_multimeter)
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
@@ -117,7 +112,6 @@ class DAQSystem:
         self.multimeter.stop()
 
     def start_scan(self, min_wn, max_wn, step, stop_mode, stop_value):
-        # If scanner is old/dead, recreate it
         if not self.scanner.is_alive() and self.scanner.running == False:
             self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
@@ -257,7 +251,6 @@ class DAQSystem:
         if hasattr(self.laser, 'update_config'):
              self.laser.update_config(new_config)
 
-        # Update Wavechannel
         if "wavechannel" in new_config:
             self.wavechannel = int(new_config["wavechannel"])
             self.scanner.set_wavechannel(self.wavechannel)

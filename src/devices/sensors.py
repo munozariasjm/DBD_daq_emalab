@@ -1,4 +1,5 @@
 import threading
+import time
 try:
     import serial
 except ImportError:

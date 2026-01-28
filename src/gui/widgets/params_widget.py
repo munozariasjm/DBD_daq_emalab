@@ -79,7 +79,10 @@ class ParamsWidget(QWidget):
 
     def set_enabled(self, enabled):
         for w in self.param_widgets:
-            w.setEnabled(enabled)
+            if w == self.btn_settings:
+                w.setEnabled(True) # Always enabled
+            else:
+                w.setEnabled(enabled)
 
     def get_params(self):
         min_wn = self.spin_min_wn.value()

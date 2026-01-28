@@ -19,6 +19,7 @@ class LaserController:
         self.step_coarse = self.config.get("step_coarse", 0.05)
         self.poll_interval = self.config.get("poll_interval", 1)
         self.coarse_approach_thresh = self.config.get("coarse_approach_threshold", 1.0)
+        self.required_stable_samples = self.config.get("required_stable_samples", 4)
 
         self.target_wn = 0.0
         self.current_wn = 0.0
@@ -45,6 +46,7 @@ class LaserController:
             self.step_coarse = self.config.get("step_coarse", 0.05)
             self.poll_interval = self.config.get("poll_interval", 0.5)
             self.coarse_approach_thresh = self.config.get("coarse_approach_threshold", 1.0)
+            self.required_stable_samples = self.config.get("required_stable_samples", 4)
             print(f"[LaserController] Config updated: tol={self.tolerance}, poll={self.poll_interval}")
 
     def set_wavenumber(self, target_wn):
@@ -97,38 +99,37 @@ class LaserController:
         # print(position)
         prevpos = position
 
-        # 2. Loop until tolerance met
-        while (wn <= self.target_wn - self.tolerance or wn >= self.target_wn + self.tolerance) and not self.stop_event.is_set():
+        # 2. Control Loop with Stability Check
+        stable_samples = 0
+        REQUIRED_STABLE_SAMPLES = self.required_stable_samples
 
-            # Logic from script:
-            # if wn <= target - 0.01:
-            #     if position+0.0001!=prevpos:
-            #         pidevice.MOV(1, position + 0.0001)
-            #     else:
-            #         pidevice.MOV(1, position - 0.05)
-            # else:
-            #     if position-0.0001!=prevpos:
-            #         pidevice.MOV(1, position - 0.0001)
-            #     else:
-            #         pidevice.MOV(1, position + 0.05)
+        while not self.stop_event.is_set():
+            wn = self.get_wavenumber()
+            position = self.device.qPOS(self.axis)[self.axis]
 
-            # NOTE: The script logic `if position+0.0001!=prevpos` is weird.
-            # Ideally `position` is current, `prevpos` is from last loop.
-            # If we moved, they should be different.
-            # If they are same, maybe we are stuck or step was too small?
+            # Check stability
+            if abs(wn - self.target_wn) < self.tolerance:
+                stable_samples += 1
+                print(f"[LaserController] Within tolerance.. stabilizing ({stable_samples}/{REQUIRED_STABLE_SAMPLES})")
+                if stable_samples >= REQUIRED_STABLE_SAMPLES:
+                    break
+
+                # Small dwell time to ensure we aren't just flying by
+                time.sleep(0.5)
+                continue
+            else:
+                stable_samples = 0 # Reset if we pop out of tolerance
 
             step_fine = self.step_fine
             step_coarse = self.step_coarse
-
             move_cmd = 0.0
 
             if wn <= self.target_wn - self.tolerance:
-                # Nead to increase WN -> Increase Position (assuming positive slope)
-                # Script logic:
-                if abs((position + step_fine) - prevpos) > 1e-9: # effectively !=
+                # Need to increase WN
+                if abs((position + step_fine) - prevpos) > 1e-9:
                         move_cmd = position + step_fine
                 else:
-                        move_cmd = position - step_coarse # Back off?
+                        move_cmd = position - step_coarse
             else:
                 # Need to decrease WN
                 if abs((position - step_fine) - prevpos) > 1e-9:
@@ -137,20 +138,14 @@ class LaserController:
                     move_cmd = position + step_coarse
 
             self.device.MOV(self.axis, move_cmd)
-            # print(move_cmd)
-            # Wait
-            # pitools.waitontarget(pidevice,axes=1) -> mimicked by sleep
-            # self.device.proxy.ServerWaitOnTarget(1)
-            # self.device.waitontarget(self.axis)
-            # time.sleep(0.5)
-            # Use interruptible wait
+
+            # Wait for move to complete (or user stop)
             if self.stop_event.wait(0.5):
                 break
 
             prevpos = position
-            position = self.device.qPOS(self.axis)[self.axis]
-            wn = self.get_wavenumber()
-
+            # Read after move for logging
+            # (Loop will re-read at start for logic)
             print(f"[LaserController] Pos: {position:.5f}, WN: {wn:.4f} (Target: {self.target_wn})")
 
         print(f"[LaserController] Target reached or stopped. Final WN: {wn:.4f}")

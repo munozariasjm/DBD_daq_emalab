@@ -36,7 +36,8 @@
             "step_fine": 0.0001,
             "step_coarse": 0.05,
             "poll_interval": 0.5,
-            "wavechannel": 3
+            "wavechannel": 3,
+            "required_stable_samples": 4
         }
     }
 }

@@ -118,7 +118,7 @@ class MockTagger:
 
                 for delay in delays:
                     # User requested only one channel (Channel 1)
-                    channel = 1
+                    channel = 2
                     absolute_ts = trigger_ts + delay
 
                     event_entry = [self.global_packet_counter, 0, channel, delay, absolute_ts]

@@ -65,26 +65,20 @@ class MockSpectrometreReader(threading.Thread):
         return round(16666.6 + drift + jitter, 6)
 
 
-class MockWavenumberReader(threading.Thread):
+class MockWavenumberReader:
     """
     Simulates the EPICS Wavemeter Reader.
-    Updates 4 channels of wavenumbers in a background thread.
+    Generates wavenumbers on demand matching the interface of WavenumberReader.
     """
     def __init__(self, refresh_rate=0.0005, source=None):
-        super().__init__()
-        self.refresh_rate = refresh_rate
         self.source = source
-        self.wavenumbers = [0.0, 0.0, 0.0, 0.0]
-        self.stop_event = threading.Event()
-        print("[SIM] MockWavenumberReader initialized")
+        print("[SIM] MockWavenumberReader initialized (On-Demand)")
 
-    def run(self):
-        while not self.stop_event.is_set():
-            self.wavenumbers = [self.get_wnum(i) for i in range(1, 5)]
-            time.sleep(self.refresh_rate)
+    def start(self):
+        pass
 
     def stop(self):
-        self.stop_event.set()
+        pass
 
     def get_wnum(self, i=1):
         if i == 1 and self.source:
@@ -98,11 +92,15 @@ class MockWavenumberReader(threading.Thread):
                     base = 16666.6
             else:
                  base = 16666.6
+        if i == 3:
+            base = 16666.6
         else:
             base = 16666.6 + (i-1) * 1000.0
 
         noise = random.uniform(-0.05, 0.05)
-        return round(base + noise, 6)
+        # return round(base + noise, 6)
+        # Return exactly base for testing stability if needed, but noise is realistic.
+        return base
 
     def get_wavenumbers(self):
-        return self.wavenumbers
+        return [self.get_wnum(i) for i in range(1, 5)]

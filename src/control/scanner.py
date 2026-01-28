@@ -3,10 +3,11 @@ import threading
 import numpy as np
 
 class Scanner(threading.Thread):
-    def __init__(self, laser, wavemeter=None):
+    def __init__(self, laser, wavemeter=None, wavechannel=3):
         super().__init__()
         self.laser = laser
         self.wavemeter = wavemeter
+        self.wavechannel = wavechannel
 
         self.running = False
         self.stop_event = threading.Event()
@@ -38,6 +39,9 @@ class Scanner(threading.Thread):
 
     def set_wavemeter(self, wavemeter):
         self.wavemeter = wavemeter
+
+    def set_wavechannel(self, channel):
+        self.wavechannel = channel
 
     def wavenumber_to_wavelength(self, wn):
         """Converts cm^-1 to nm."""
@@ -81,57 +85,70 @@ class Scanner(threading.Thread):
                 self.current_bin_index = i
                 self.current_wavenumber = wn
 
-                # 1. Move Laser
-                # Check if laser supports setting wavenumber directly (Preferred for realistic control)
-                if hasattr(self.laser, 'set_wavenumber'):
-                    self.laser.set_wavenumber(wn)
-                else:
-                    # Fallback to Wavelength (nm)
-                    target_nm = self.wavenumber_to_wavelength(wn)
-                    self.laser.set_wavelength(target_nm)
-
-                # 2. Wait for stable
-                # We wait until the laser reports it is stable at the new wavelength
-                while not self.laser.is_stable():
-                    if self.stop_event.is_set(): return
-                    self.wait_for_pause()
-                    time.sleep(0.05)
-
-                # 3. Start Accumulating
-                self.accumulated_events = 0
-                self.accumulated_bunches = 0
-                self.bin_measured_wns = [] # Track live wavemeter readings for this bin
-                self.is_accumulating = True
-                self.bin_paused_duration = 0.0 # Track time spent paused
-
-                start_time = time.time()
-
-                # Wait loop
+                # Bin Loop (Retry logic for drift)
                 while True:
-                    if self.stop_event.is_set(): return
-                    self.wait_for_pause()
+                    if self.stop_event.is_set(): break
 
-                    # Check Stop Condition
-                    current_time = time.time()
-                    current_duration = current_time - start_time - self.bin_paused_duration
+                    # 1. Move Laser (Ensure target is set and controller is active)
+                    if hasattr(self.laser, 'set_wavenumber'):
+                        self.laser.set_wavenumber(wn)
+                    else:
+                        target_nm = self.wavenumber_to_wavelength(wn)
+                        self.laser.set_wavelength(target_nm)
 
-                    if self.stop_mode == 'events':
-                        if self.accumulated_events >= self.stop_value:
+                    # 2. Wait for stable
+                    while not self.laser.is_stable():
+                        if self.stop_event.is_set(): return
+                        self.wait_for_pause()
+                        time.sleep(0.05)
+
+                    # 3. Start Accumulating
+                    self.accumulated_events = 0
+                    self.accumulated_bunches = 0
+                    self.bin_measured_wns = []
+                    self.is_accumulating = True
+                    self.bin_paused_duration = 0.0
+
+                    start_time = time.time()
+                    bin_complete = False
+
+                    # Accumulation Loop
+                    while True:
+                        if self.stop_event.is_set(): return
+                        self.wait_for_pause()
+
+                        if not self.laser.is_stable():
+                            print(f"[Scanner] Drift detected at {wn:.4f}. Resetting bin...")
+                            self.is_accumulating = False
                             break
-                    elif self.stop_mode == 'bunches':
-                        if self.accumulated_bunches >= self.stop_value:
-                            break
-                    elif self.stop_mode == 'time':
-                        if current_duration >= self.stop_value:
-                            break
 
-                    # Track Measured Wavenumber
-                    if self.wavemeter:
-                        wn_status = self.wavemeter.get_wavenumbers()
-                        if wn_status and wn_status[0] > 0:
-                            self.bin_measured_wns.append(wn_status[0])
+                        # Check Stop Condition
+                        current_time = time.time()
+                        current_duration = current_time - start_time - self.bin_paused_duration
 
-                    time.sleep(0.005)
+                        if self.stop_mode == 'events':
+                            if self.accumulated_events >= self.stop_value:
+                                bin_complete = True
+                                break
+                        elif self.stop_mode == 'bunches':
+                            if self.accumulated_bunches >= self.stop_value:
+                                bin_complete = True
+                                break
+                        elif self.stop_mode == 'time':
+                            if current_duration >= self.stop_value:
+                                bin_complete = True
+                                break
+
+                        # Track Measured Wavenumber
+                        if self.wavemeter:
+                            wn_status = self.wavemeter.get_wavenumbers()
+                            if wn_status and wn_status[int(self.wavechannel-1)] > 0:
+                                self.bin_measured_wns.append(wn_status[int(self.wavechannel-1)])
+
+                        time.sleep(0.005)
+
+                    if bin_complete:
+                        break # Break Retry Loop -> Bin Done
 
                 # 4. Stop Accumulating
                 self.is_accumulating = False
@@ -177,19 +194,17 @@ class Scanner(threading.Thread):
         """Returns a dict with current status for GUI."""
         elapsed = time.time() - self.start_timestamp if self.start_timestamp > 0 else 0
 
-        # Estimate Remaining
         eta_seconds = 0
         if self.bins_completed > 0:
             avg_per_bin = elapsed / self.bins_completed
             remaining_bins = self.total_bins - self.bins_completed
             eta_seconds = remaining_bins * avg_per_bin
 
-        # Deriving Measured Wavenumber from Wavemeter
         measured_wn = 0.0
         if self.wavemeter:
             wns = self.wavemeter.get_wavenumbers()
-            if wns and wns[0] > 0:
-                measured_wn = wns[0]
+            if wns and wns[int(self.wavechannel-1)] > 0:
+                measured_wn = wns[int(self.wavechannel-1)]
 
         return {
             "target_wn": self.current_wavenumber,
@@ -210,7 +225,9 @@ class Scanner(threading.Thread):
 
     def stop(self, wait=True):
         self.stop_event.set()
-        # If paused, enforce resume so the thread can wake up and exit
+        if hasattr(self.laser, 'stop'):
+            self.laser.stop()
+
         if not self.pause_event.is_set():
             self.pause_event.set()
 

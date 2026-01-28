@@ -50,7 +50,10 @@ class ActionsWidget(QWidget):
 
     def update_state(self, is_running, is_paused):
         if is_running:
-            self.btn_start.setEnabled(False)
+            # Change start button to orange when running
+            self.btn_start.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+            self.btn_start.setEnabled(True) # Keep enabled to show pop-up
+
             self.btn_stop.setEnabled(True)
             self.btn_pause.setEnabled(True)
 
@@ -59,6 +62,8 @@ class ActionsWidget(QWidget):
             else:
                 self.btn_pause.setText("Pause Scan")
         else:
+            # Revert start button to green when stopped
+            self.btn_start.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
             self.btn_pause.setEnabled(False)

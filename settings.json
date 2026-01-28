@@ -1,10 +1,10 @@
 {
     "scan_settings": {
-        "min_wn": 12625.17,
-        "max_wn": 12625.2,
+        "min_wn": 12623.17,
+        "max_wn": 12628.0,
         "step_size": 0.01,
         "stop_mode": "bunches",
-        "stop_val": 100.0
+        "stop_val": 10.0
     },
     "gui_settings": {
         "window_width": 1200,
@@ -32,10 +32,12 @@
     "simulation_mode": false,
     "control_settings": {
         "laser": {
-            "tolerance": 0.1,
+            "tolerance": 0.01,
             "step_fine": 0.0001,
             "step_coarse": 0.05,
-            "poll_interval": 0.5
+            "poll_interval": 0.5,
+            "wavechannel": 3,
+            "required_stable_samples": 4
         }
     }
 }

@@ -2,7 +2,7 @@
     "scan_settings": {
         "min_wn": 12625.18,
         "max_wn": 12625.21,
-        "step_size": 1e-06,
+        "step_size": 0.001,
         "stop_mode": "bunches",
         "stop_val": 50.0
     },
@@ -33,7 +33,7 @@
     "control_settings": {
         "laser": {
             "tolerance": 0.0001,
-            "step_fine": 1e-05,
+            "step_fine": 0.0001,
             "step_coarse": 0.001,
             "poll_interval": 0.01,
             "required_stable_samples": 4,

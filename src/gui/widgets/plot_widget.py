@@ -10,6 +10,7 @@ class PlotWidget(QWidget):
         self.lines = {}
         self.bars = {}
         self.active_options = ['rate', 'scan']
+        self.auto_scale = True
         self.init_ui()
 
     def init_ui(self):
@@ -27,6 +28,14 @@ class PlotWidget(QWidget):
     def set_active_plots(self, options):
         self.active_options = options
         self.rebuild_plots()
+
+    def set_auto_scale(self, enabled):
+        self.auto_scale = enabled
+        if enabled:
+            # Trigger an immediate update (or just wait for next tick)
+            # We can force strict limits immediately if we had the last history,
+            # but usually next tick is fine.
+            pass
 
     def rebuild_plots(self):
         self.fig.clf()
@@ -94,11 +103,13 @@ class PlotWidget(QWidget):
         # Rate
         if 'rate' in self.lines:
             self.lines['rate'].set_data(times, history['rate'])
+            self.lines['rate'].set_data(times, history['rate'])
             ax = self.axes['rate']
-            ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
-            valid_rates = [r for r in history['rate'] if r is not None]
-            if valid_rates:
-                ax.set_ylim(0, max(max(valid_rates), 1.0) * 1.2)
+            if self.auto_scale:
+                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
+                valid_rates = [r for r in history['rate'] if r is not None]
+                if valid_rates:
+                    ax.set_ylim(0, max(max(valid_rates), 1.0) * 1.2)
 
         # Scan
         if 'scan' in self.lines:
@@ -106,10 +117,12 @@ class PlotWidget(QWidget):
             if scan_data:
                 wls, rates, _, _ = zip(*scan_data)
                 self.lines['scan'].set_data(wls, rates)
+                self.lines['scan'].set_data(wls, rates)
                 ax = self.axes['scan']
-                ax.set_xlim(min(wls)-0.1, max(wls)+0.1)
-                if rates:
-                    ax.set_ylim(0, max(max(rates), 1.0) * 1.2)
+                if self.auto_scale:
+                    ax.set_xlim(min(wls)-0.1, max(wls)+0.1)
+                    if rates:
+                        ax.set_ylim(0, max(max(rates), 1.0) * 1.2)
 
             target_wn_list = history.get('target_wn', [])
             current_target = target_wn_list[-1] if target_wn_list else 0
@@ -117,35 +130,49 @@ class PlotWidget(QWidget):
 
             if scan_data and current_target > 0:
                 ax = self.axes['scan']
-                current_xlim = ax.get_xlim()
-                wls, _, _, _ = zip(*scan_data)
-                min_x = min(min(wls), current_target) - 0.5
-                max_x = max(max(wls), current_target) + 0.5
-                ax.set_xlim(min_x, max_x)
+            if scan_data and current_target > 0:
+                ax = self.axes['scan']
+                if self.auto_scale:
+                    # Only re-center on target if auto scaling
+                    # But actually, keeping target in view is good even if not scaling Y?
+                    # No, let's treat "Lock/Auto-Scale" as completely locking the view unless user moves it
+                    # So if auto-scale is OFF, we do NOTHING to limits.
+                    current_xlim = ax.get_xlim()
+                    wls, _, _, _ = zip(*scan_data)
+                    min_x = min(min(wls), current_target) - 0.5
+                    max_x = max(max(wls), current_target) + 0.5
+                    ax.set_xlim(min_x, max_x)
 
         if 'laser_curr' in self.lines:
             self.lines['laser_curr'].set_data(times, history['wn'])
             self.lines['laser_target'].set_data(times, history['target_wn'])
             ax = self.axes['laser']
-            ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
+            self.lines['laser_curr'].set_data(times, history['wn'])
+            self.lines['laser_target'].set_data(times, history['target_wn'])
+            ax = self.axes['laser']
 
-            all_wns = [w for w in (list(history['wn']) + list(history['target_wn'])) if w and w > 0]
-            if all_wns:
-                min_y, max_y = min(all_wns), max(all_wns)
-                span = max_y - min_y
-                if span < 0.1: span = 1.0
-                ax.set_ylim(min_y - span*0.2, max_y + span*0.2)
+            if self.auto_scale:
+                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
+                all_wns = [w for w in (list(history['wn']) + list(history['target_wn'])) if w and w > 0]
+                if all_wns:
+                    min_y, max_y = min(all_wns), max(all_wns)
+                    span = max_y - min_y
+                    if span < 0.1: span = 1.0
+                    ax.set_ylim(min_y - span*0.2, max_y + span*0.2)
 
         if 'volt' in self.lines:
             self.lines['volt'].set_data(times, history['volt'])
             ax = self.axes['volt']
-            ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
-            all_volts = list(history['volt'])
-            if all_volts:
-                min_v, max_v = min(all_volts), max(all_volts)
-                v_span = max_v - min_v
-                if v_span < 0.1: v_span = 0.1
-                ax.set_ylim(min_v - v_span*0.2, max_v + v_span*0.2)
+            self.lines['volt'].set_data(times, history['volt'])
+            ax = self.axes['volt']
+            if self.auto_scale:
+                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
+                all_volts = list(history['volt'])
+                if all_volts:
+                    min_v, max_v = min(all_volts), max(all_volts)
+                    v_span = max_v - min_v
+                    if v_span < 0.1: v_span = 0.1
+                    ax.set_ylim(min_v - v_span*0.2, max_v + v_span*0.2)
 
         if 'tof' in self.lines:
             tof_data = history.get('tof_buffer', [])
@@ -154,9 +181,11 @@ class PlotWidget(QWidget):
                 centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
                 self.lines['tof'].set_data(centers, counts)
+                self.lines['tof'].set_data(centers, counts)
                 ax = self.axes['tof']
-                ax.set_xlim(min(centers), max(centers))
-                ax.set_ylim(0, max(counts) * 1.1)
+                if self.auto_scale:
+                    ax.set_xlim(min(centers), max(centers))
+                    ax.set_ylim(0, max(counts) * 1.1)
                 ax.set_title(f"ToF Histogram ({len(tof_data)} events)")
 
         self.canvas.draw_idle()

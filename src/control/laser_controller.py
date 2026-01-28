@@ -69,7 +69,8 @@ class LaserController:
         """
         Returns the current wavenumber from EPICS.
         """
-        return float(self.epics.caget('LaserLab:wavenumber_1'))
+        channel = self.config.get("wavechannel", 1)
+        return float(self.epics.caget(f'LaserLab:wavenumber_{channel}'))
 
     def is_stable(self, tolerance=None):
         """

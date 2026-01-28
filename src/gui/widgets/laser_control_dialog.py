@@ -42,6 +42,12 @@ class LaserControlDialog(QDialog):
         self.poll_spin.setValue(self.settings.get("poll_interval", 0.5))
         self.form_layout.addRow("Poll Interval (s):", self.poll_spin)
 
+        # Stable Samples
+        self.stable_samples_spin = QSpinBox()
+        self.stable_samples_spin.setRange(1, 20)
+        self.stable_samples_spin.setValue(int(self.settings.get("required_stable_samples", 4)))
+        self.form_layout.addRow("Stable Samples:", self.stable_samples_spin)
+
         self.channel_spin = QDoubleSpinBox()
         self.channel_spin = QSpinBox()
         self.channel_spin.setRange(1, 4)
@@ -62,5 +68,6 @@ class LaserControlDialog(QDialog):
             "step_fine": self.fine_step_spin.value(),
             "step_coarse": self.coarse_step_spin.value(),
             "poll_interval": self.poll_spin.value(),
+            "required_stable_samples": self.stable_samples_spin.value(),
             "wavechannel": self.channel_spin.value()
         }

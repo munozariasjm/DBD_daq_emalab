@@ -98,6 +98,13 @@ class MainWindow(QMainWindow):
         self.plot_widget.set_active_plots(self.plot_options_widget.get_options())
 
     def on_start(self):
+        status = self.daq.scanner.get_status()
+        if status['is_running']:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Scan Running",
+                                "A scan is currently running, either pause it, or stop it.")
+            return
+
         params = self.params_widget.get_params()
 
         try:

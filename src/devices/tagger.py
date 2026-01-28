@@ -7,7 +7,11 @@ import os
 this_path = os.path.abspath(__file__)
 father_path = "C:\\Users\\EMALAB\\Desktop\\TW_DAQ"
 sys.path.append(father_path)
-from TimeTaggerDriver_isolde.timetagger4 import TimeTagger as tg
+try:
+    from TimeTaggerDriver_isolde.timetagger4 import TimeTagger as tg
+except ImportError:
+    print("[HW] Warning: TimeTaggerDriver_isolde not found. Tagger will not work in real mode.")
+    tg = None
 
 def convert_to_stoptime(t):
     # 30000 -> ~15 us

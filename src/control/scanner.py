@@ -3,10 +3,11 @@ import threading
 import numpy as np
 
 class Scanner(threading.Thread):
-    def __init__(self, laser, wavemeter=None):
+    def __init__(self, laser, wavemeter=None, wavechannel=3):
         super().__init__()
         self.laser = laser
         self.wavemeter = wavemeter
+        self.wavechannel = wavechannel
 
         self.running = False
         self.stop_event = threading.Event()
@@ -26,8 +27,8 @@ class Scanner(threading.Thread):
         self.accumulated_events = 0
         self.accumulated_bunches = 0
         self.is_accumulating = False # If True, we are in the "Measurement" phase
-        self.wavechannel =  3 
-         
+        # self.wavechannel is set in __init__
+
         # Results (for plotting)
         self.scan_progress = []
 
@@ -39,6 +40,9 @@ class Scanner(threading.Thread):
 
     def set_wavemeter(self, wavemeter):
         self.wavemeter = wavemeter
+
+    def set_wavechannel(self, channel):
+        self.wavechannel = channel
 
     def wavenumber_to_wavelength(self, wn):
         """Converts cm^-1 to nm."""
@@ -211,7 +215,11 @@ class Scanner(threading.Thread):
 
     def stop(self, wait=True):
         self.stop_event.set()
-        # If paused, enforce resume so the thread can wake up and exit
+        # Explicitly stop the laser controller so it doesn't keep running
+        # if the scanner was aborted mid-bin.
+        if hasattr(self.laser, 'stop'):
+            self.laser.stop()
+
         if not self.pause_event.is_set():
             self.pause_event.set()
 

@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox,
                              QDialogButtonBox, QLabel)
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QSpinBox
 
 class LaserControlDialog(QDialog):
     def __init__(self, current_settings: dict, parent=None):
@@ -41,6 +42,12 @@ class LaserControlDialog(QDialog):
         self.poll_spin.setValue(self.settings.get("poll_interval", 0.5))
         self.form_layout.addRow("Poll Interval (s):", self.poll_spin)
 
+        self.channel_spin = QDoubleSpinBox()
+        self.channel_spin = QSpinBox()
+        self.channel_spin.setRange(1, 4)
+        self.channel_spin.setValue(int(self.settings.get("wavechannel", 3)))
+        self.form_layout.addRow("Wavemeter Channel:", self.channel_spin)
+
         self.layout.addLayout(self.form_layout)
 
         # Buttons
@@ -54,5 +61,6 @@ class LaserControlDialog(QDialog):
             "tolerance": self.tolerance_spin.value(),
             "step_fine": self.fine_step_spin.value(),
             "step_coarse": self.coarse_step_spin.value(),
-            "poll_interval": self.poll_spin.value()
+            "poll_interval": self.poll_spin.value(),
+            "wavechannel": self.channel_spin.value()
         }

@@ -96,7 +96,7 @@ class Scanner(threading.Thread):
                 while not self.laser.is_stable():
                     if self.stop_event.is_set(): return
                     self.wait_for_pause()
-                    time.sleep(0.2)
+                    time.sleep(0.05)
 
                 # 3. Start Accumulating
                 self.accumulated_events = 0

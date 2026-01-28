@@ -124,8 +124,8 @@ class LaserController:
         # 1. Read initial state
         wn = self.get_wavenumber()
         position = self.device.qPOS(self.axis)[self.axis]
-        time.sleep(1)
-        print(position)
+        # time.sleep(1)
+        # print(position)
         prevpos = position
 
         # 2. Loop until tolerance met
@@ -195,7 +195,7 @@ class LaserController:
             # self.device.proxy.ServerWaitOnTarget(1)
             # print("imoved")
             # self.device.waitontarget(self.axis)
-            time.sleep(1)
+            time.sleep(0.5)
 
             # Update Loop State
             prevpos = position

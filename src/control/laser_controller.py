@@ -2,37 +2,6 @@ import time
 import threading
 from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
 
-# # Helper to mimic pitools.waitontarget equivalent
-# def wait_on_target(device, axis, poll_interval=1):
-#     """
-#     Simulates pitools.waitontarget.
-#     In the mock, we just check if position == target.
-#     """
-#     while True:
-#         try:
-#             # Check if moving
-#             # For our simplified mock, we can check position vs target
-#             pos = device.qPOS(axis)[axis]
-#             # device.MOV updates target immediately, but physics updates pos over time
-#             # We don't have direct access to target_pos in this helper easily unless we expose it
-#             # But the mock updates instantly if we don't call update_physics manually loop
-
-#             # Actually, standard waitontarget checks the "IsMoving" status bit usually.
-#             # Our mock doesn't implement IsMoving fully, but let's assume if pos is close to last set target.
-#             # Better: let's trust the device physics simulation time.
-
-#             # In real script: pitools.waitontarget(pidevice, axes=1)
-#             time.sleep(poll_interval)
-
-#             # For the mock, we can check velocity or just wait a bit.
-#             # Let's rely on the mock's physics being "reasonably fast" relative to this loop
-#             # or check if it matches target.
-#             # Since we can't easily access target without private access, let's just sleep.
-#             # The real script waits for servo settling.
-#             break
-#         except Exception:
-#              break
-
 class LaserController:
     """
     Encapsulates the logic from the 'go_to' script to control the Laser
@@ -143,10 +112,6 @@ class LaserController:
             #     else:
             #         pidevice.MOV(1, position + 0.05)
 
-            # ADAPTATION: The script uses hardcoded 0.05 and 0.0001 steps.
-            # It seems to try small steps, but if stuck (pos == prevpos), it does a large jump?
-            # Or maybe it's just coarse/fine logic.
-
             # NOTE: The script logic `if position+0.0001!=prevpos` is weird.
             # Ideally `position` is current, `prevpos` is from last loop.
             # If we moved, they should be different.
@@ -171,33 +136,17 @@ class LaserController:
                 else:
                     move_cmd = position + step_coarse
 
-            # Optimization: If we are FAR away, the script's linear +/- 0.0001 is very slow.
-            # The script provided seems to be a "fine tuning" script ("go_to").
-            # Real usage might involve a coarse move first?
-            # For this task, I should STICK TO THE SCRIPT LOGIC as requested ("get closer to actual data format").
-            # BUT, if I start 1000 nm away,0.0001 steps take forever.
-            # Let's add a "Course Approach" if diff is large, or assume we are close.
-            # Since the simulation can start anywhere, let's add a proportional term if very far.
-
-            # diff_wn = self.target_wn - wn
-            # if abs(diff_wn) > self.coarse_approach_thresh:
-            #     # Use a rough estimate to get closer faster
-            #     # Guess slope approx 100 wn / mm
-            #     correction = diff_wn / 100.0
-            #     move_cmd = position + correction
-            #     print(f"[LaserController] Coarse move: {correction:.4f}")
-
-            # Execute Move
             self.device.MOV(self.axis, move_cmd)
             # print(move_cmd)
             # Wait
             # pitools.waitontarget(pidevice,axes=1) -> mimicked by sleep
             # self.device.proxy.ServerWaitOnTarget(1)
-            # print("imoved")
             # self.device.waitontarget(self.axis)
-            time.sleep(0.5)
+            # time.sleep(0.5)
+            # Use interruptible wait
+            if self.stop_event.wait(0.5):
+                break
 
-            # Update Loop State
             prevpos = position
             position = self.device.qPOS(self.axis)[self.axis]
             wn = self.get_wavenumber()
@@ -206,10 +155,6 @@ class LaserController:
 
         print(f"[LaserController] Target reached or stopped. Final WN: {wn:.4f}")
         self.is_moving = False
-
-        # except Exception as e:
-        #     print(f"[LaserController] Error: {e}")
-        #     self.is_moving = False
 
 if __name__ == "__main__":
     pass

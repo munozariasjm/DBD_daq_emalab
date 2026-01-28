@@ -1,6 +1,10 @@
 import xmlrpc.client
 from threading import Lock
-import epics
+try:
+    import epics
+except ImportError:
+    print("[HW] Warning: epics module not found.")
+    epics = None
 
 import os
 
@@ -24,8 +28,8 @@ class PIGCSDevice:
         # Every thread that accesses 'self.proxy' gets its own instance
         if not hasattr(self._local, 'instance'):
             self._local.instance = xmlrpc.client.ServerProxy(
-                self.url, 
-                allow_none=True, 
+                self.url,
+                allow_none=True,
                 use_builtin_types=True
             )
         return self._local.instance
@@ -43,7 +47,7 @@ class PIGCSDevice:
     def SVO(self, axis, state):
         # If your code calls SVO, make sure it's handled or mocked
         pass
-    
+
 # class PIGCSDevice:
 #     """
 #     Robust Remote Client. Connects to laser_server.py.

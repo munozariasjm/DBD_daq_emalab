@@ -22,9 +22,9 @@ else:
         sys.exit(1)
 
 CONTROLLERNAME = 'HydraPollux'
-COM_PORT = 5           # Adjust to your Lab Computer's actual COM port
+COM_PORT = 5
 BAUD_RATE = 19200
-SERVER_IP = '0.0.0.0'  # Listen on all available network interfaces
+SERVER_IP = '0.0.0.0'
 SERVER_PORT = 8000
 
 class ThreadedXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
@@ -52,9 +52,6 @@ class LaserServerInterface:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
 
-    # def qIDN(self):
-    #     return self.pi.qIDN() if self.pi else "Hardware Offline"
-
     def MOV(self, axis, target):
         print(f"[CMD] MOV Axis {axis} -> {target}")
         try:
@@ -73,64 +70,15 @@ class LaserServerInterface:
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")
             return 0.0
-    
-    # def updateParams(self, params=[0.01,0.0001,0.05]):
-    #     self.uncertainty,self.step_size,self.backlash = params
-    
-
-    # def ServerWaitOnTarget(self, axis=1, timeout=5.0):
-    #     """
-    #     BLOCKING WAIT: Performed locally on the server.
-    #     Polls 'IsMoving' rapidly with zero network latency.
-    #     Returns True when target is reached.
-    #     """
-    #     if not self.pi: return True
-
-    #     print(f"[Wait] Blocking for Axis {axis} stability...")
-    #     # if SIMULATION:
-    #     start_time = time.time()
-
-    #     while True:
-    #         if time.time() - start_time > timeout:
-    #             print(f"[Wait] TIMEOUT on Axis {axis}")
-    #             return False
-
-    #         try:
-    #             # IsMoving returns dict {axis: bool}
-    #             is_moving = self.pi.IsMoving(axis)[axis]
-    #             if not is_moving:
-    #                 print(f"[Wait] Movement Complete.")
-    #                 return True
-    #         except Exception as e:
-    #             print(f"[Wait] Error reading status: {e}")
-    #             return False
-
-    #         time.sleep(0.5)    
-    #     # else:
-    #     #     pitools.waitontarget(self.pi,axes=axis)
-
-    # def get_epics_wn(self, pv_name):
-    #     """Fetches Wavenumber from local EPICS environment."""
-    #     if SIMULATION:
-    #         return float(mock_caget(pv_name))
-    #     try:
-    #         val = epics.caget(pv_name)
-    #         return float(val) if val is not None else 0.0
-    #     except Exception as e:
-    #         print(f"[EPICS] Error: {e}")
-    #         return 0.0
 
     def close(self):
-        # if self.pi:
         self.pi.CloseConnection()
 
 if __name__ == "__main__":
     import time
     import socket
-    # Prevent the server from hanging on dead connections
     socket.setdefaulttimeout(120)
 
-    # 'allow_none=True' is required to handle void return types
     server = ThreadedXMLRPCServer((SERVER_IP, SERVER_PORT), allow_none=True)
     server.register_instance(LaserServerInterface())
 

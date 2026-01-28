@@ -1,13 +1,24 @@
 import threading
-import serial
-import time
-import epics
-from epics import PV
+try:
+    import serial
+except ImportError:
+    print("[HW] Warning: serial module not found.")
+    serial = None
+
+try:
+    import epics
+    from epics import PV
+except ImportError:
+    print("[HW] Warning: epics module not found.")
+    epics = None
+    PV = None
 global wavenumbers_pvs
 
 wavenumbers_pv_names = ["LaserLab:wavenumber_1", "LaserLab:wavenumber_2", "LaserLab:wavenumber_3", "LaserLab:wavenumber_4"]
 
-wavenumbers_pvs = [PV(name) for name in wavenumbers_pv_names]
+wavenumbers_pvs = []
+if PV is not None:
+    wavenumbers_pvs = [PV(name) for name in wavenumbers_pv_names]
 
 
 class HP_Multimeter:
@@ -17,20 +28,20 @@ class HP_Multimeter:
         time.sleep(0.25)
         self.setRemote()
         time.sleep(0.25)
-    
+
     def reset(self):
         self.device.write(b'*RST\n')
         self.device.readline()
-    
+
     def setRemote(self):
         self.device.write(b'SYSTEM:REMOTE\n')
         self.device.readline()
-    
+
     def identity(self):
         self.device.write(b'*IDN?\n')
         response = self.device.readline()
         return response
-    
+
     def getVoltage(self):
         self.device.write(b"MEAS:VOLT:DC?\n")
         try:
@@ -40,7 +51,7 @@ class HP_Multimeter:
             print('uh oh, exception occurred reading the voltage', expn)
             response = 0.0
         return response
-    
+
 class VoltageReader(threading.Thread):
     def __init__(self, multimeter, refresh_rate=0.5):
         super().__init__()
@@ -57,11 +68,11 @@ class VoltageReader(threading.Thread):
             except Exception as expn:
                 self.voltage = -69419.999999999999
                 time.sleep(self.refresh_rate)
-                
-    
+
+
     def stop(self):
         self.stop_event.set()
-    
+
     def get_voltage(self):
         return self.voltage
 
@@ -80,10 +91,10 @@ class SpectrometreReader(threading.Thread):
         while not self.stop_event.is_set():
             self.spectrum = self.get_spec()
             time.sleep(self.refresh_rate)
-    
+
     def stop(self):
         self.stop_event.set()
-    
+
     def get_spec(self):
         try:
             spec = epics.caget(self.pv_name)
@@ -92,7 +103,7 @@ class SpectrometreReader(threading.Thread):
         except Exception as e:
             print(f"Error getting spectrum: {e}")
             print("Spectrum Disconnected!:", spec)
-            
+
             return 0.00
 
 class WavenumberReader:
@@ -109,6 +120,6 @@ class WavenumberReader:
         except Exception as e:
             # print(f"Error getting wavenumber: {e}")
             return 0.00000
-        
+
     def get_wavenumbers(self):
         return [self.get_wnum(k) for k in range(1,5)]

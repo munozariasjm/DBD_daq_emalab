@@ -99,7 +99,7 @@ class MockEpicsClient:
         # Let's assume a simplified relationship for simulation:
         # 1 mm = 100 cm^-1
         self.slope = initialization_params.get("slope", 100.0)
-        self.offset = initialization_params.get("offset", 12000.0)
+        self.offset = initialization_params.get("offset", 16600.0)
         self.noise = initialization_params.get("noise_level", 0.0005)
 
     def caget(self, pvname):

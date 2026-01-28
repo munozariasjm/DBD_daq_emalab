@@ -24,13 +24,13 @@ class DAQSystem:
     def __init__(self, config=None):
         self.config = config or {}
         sim_config = self.config.get("simulation_settings", {})
-        
-        self.wavechannel = 3
+
         # Configuration extraction
         laser_sim_settings = sim_config.get("laser", {})
         epics_sim_settings = sim_config.get("epics", {})
         control_config = self.config.get("control_settings", {})
         laser_control_settings = control_config.get("laser", {})
+        self.wavechannel = int(laser_control_settings.get("wavechannel", 3))
 
         simulation_mode = self.config.get("simulation_mode", True)
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
@@ -55,16 +55,11 @@ class DAQSystem:
 
             # SIMULATING MOTOR FOR NOW
             self.pi_device = PIGCSDevice("ANYTHING")#, initialization_params=laser_sim_settings)
-            # self.pi_device.ConnectRS232(...) # TODO: specific connection logic
-
-            # self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
-            # self.pi_device.SVO(1, 1) # Enable Servo for simulation
 
             self.epics_client = ComClient(self.pi_device, initialization_params=epics_sim_settings)
 
             self.hp_multimeter = HP_Multimeter(port="COM16")#, initialization_params=sim_config.get("multimeter", {}))
             self.multimeter = VoltageReader(self.hp_multimeter)
-            # self.multimeter.reset()
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
 
@@ -73,7 +68,7 @@ class DAQSystem:
 
         # Services
         self.saver = None
-        self.scanner = Scanner(self.laser, self.wave_reader)
+        self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
         # State
         self.running = False
@@ -97,7 +92,6 @@ class DAQSystem:
         self.spec_reader.start()
         self.multimeter.start()
         self.tagger.start_reading()
-        # Saver is now started per scan
 
         self.daq_thread = threading.Thread(target=self._daq_loop, daemon=True)
         self.daq_thread.start()
@@ -125,7 +119,7 @@ class DAQSystem:
     def start_scan(self, min_wn, max_wn, step, stop_mode, stop_value):
         # If scanner is old/dead, recreate it
         if not self.scanner.is_alive() and self.scanner.running == False:
-            self.scanner = Scanner(self.laser, self.wave_reader)
+            self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
         if self.scanner.is_alive():
              print("[DAQ] Scanner already running.")
@@ -262,7 +256,14 @@ class DAQSystem:
         """
         if hasattr(self.laser, 'update_config'):
              self.laser.update_config(new_config)
-             print("[DAQ] Laser settings updated.")
+
+        # Update Wavechannel
+        if "wavechannel" in new_config:
+            self.wavechannel = int(new_config["wavechannel"])
+            self.scanner.set_wavechannel(self.wavechannel)
+            print(f"[DAQ] Wavemeter Channel updated to {self.wavechannel}")
+
+        print("[DAQ] Laser settings updated.")
 
 
     def get_instant_rate(self):

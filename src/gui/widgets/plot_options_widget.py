@@ -1,10 +1,11 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGroupBox, QListWidget, QListWidgetItem, QAbstractItemView, QCheckBox, QLabel)
 from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtWidgets import QCheckBox
 
 class PlotOptionsWidget(QWidget):
-    # Signal now emits ordered list of active plot keys
     options_changed = pyqtSignal(list)
     auto_scale_toggled = pyqtSignal(bool)
+    theme_toggled = pyqtSignal(bool) # True = Dark, False = Light
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,21 +20,21 @@ class PlotOptionsWidget(QWidget):
         layout_opts = QVBoxLayout()
         grp_opts.setLayout(layout_opts)
 
-        # Auto-Scale Checkbox
-        from PyQt5.QtWidgets import QCheckBox
         self.chk_auto_scale = QCheckBox("Lock/Auto-Scale Axes")
         self.chk_auto_scale.setChecked(True)
         self.chk_auto_scale.toggled.connect(self.auto_scale_toggled.emit)
         layout_opts.addWidget(self.chk_auto_scale)
+        self.chk_theme = QCheckBox("Dark Mode")
+        self.chk_theme.setChecked(False)
+        self.chk_theme.toggled.connect(self.theme_toggled.emit)
+        layout_opts.addWidget(self.chk_theme)
 
-        # List Widget
-        layout_opts.addWidget(QLabel("Drag to Reorder:")) # Import QLabel if needed or just use string
+        layout_opts.addWidget(QLabel("Drag to Reorder:"))
         self.list_widget = QListWidget()
         self.list_widget.setDragDropMode(QAbstractItemView.InternalMove)
         self.list_widget.model().rowsMoved.connect(self.emit_options)
         self.list_widget.itemChanged.connect(self.emit_options)
 
-        # Add Items
         self.add_item('rate', "Event Rate vs Time", checked=True)
         self.add_item('scan', "Scan Results (Rate vs WN)", checked=True)
         self.add_item('laser', "Measured & Target WN vs Time", checked=False)
@@ -59,7 +60,6 @@ class PlotOptionsWidget(QWidget):
         self.options_changed.emit(active_plots)
 
     def get_options(self):
-        # Used for initial state
         active_plots = []
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)

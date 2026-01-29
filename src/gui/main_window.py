@@ -102,6 +102,8 @@ class MainWindow(QMainWindow):
                                 "A scan is currently running, either pause it, or stop it.")
             return
 
+        self.on_reset()
+
         params = self.params_widget.get_params()
 
         try:
@@ -136,8 +138,6 @@ class MainWindow(QMainWindow):
         if self.daq.saver:
             self.daq.saver.stop()
             self.daq.saver = None
-
-        self.on_reset()
 
     def on_pause(self):
         status = self.daq.scanner.get_status()

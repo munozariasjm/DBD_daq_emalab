@@ -108,8 +108,8 @@ class MainWindow(QMainWindow):
 
         try:
             self.daq.start_scan(
-                params['min_wn'],
-                params['max_wn'],
+                params['start_wn'],
+                params['end_wn'],
                 params['step_size'],
                 params['stop_mode'],
                 params['stop_val']
@@ -121,8 +121,8 @@ class MainWindow(QMainWindow):
             self.current_info_text = info_text
 
             self.scan_settings.update({
-                'min_wn': params['min_wn'],
-                'max_wn': params['max_wn'],
+                'start_wn': params['start_wn'],
+                'end_wn': params['end_wn'],
                 'step_size': params['step_size'],
                 'stop_mode': params['stop_mode'],
                 'stop_val': params['stop_val']
@@ -247,8 +247,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         params = self.params_widget.get_params()
         self.scan_settings.update({
-            'min_wn': params['min_wn'],
-            'max_wn': params['max_wn'],
+            'start_wn': params['start_wn'],
+            'end_wn': params['end_wn'],
             'step_size': params['step_size'],
             'stop_mode': params['stop_mode'],
             'stop_val': params['stop_val']

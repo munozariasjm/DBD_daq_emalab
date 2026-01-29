@@ -15,8 +15,8 @@ class Scanner(threading.Thread):
         self.pause_event.set() # Set means "Not Paused" (Running)
 
         # Scan Configuration
-        self.min_wn = 16666.0
-        self.max_wn = 16680.0
+        self.start_wn = 16666.0
+        self.end_wn = 16680.0
         self.step_size = 0.5 # cm^-1
         self.stop_mode = 'events' # 'events' or 'time'
         self.stop_value = 100 # count or seconds
@@ -58,9 +58,9 @@ class Scanner(threading.Thread):
         self.current_bin_index = 0
         print("[Scanner] Scan history reset.")
 
-    def configure(self, min_wn, max_wn, step, stop_mode='events', stop_value=100):
-        self.min_wn = min_wn
-        self.max_wn = max_wn
+    def configure(self, start_wn, end_wn, step, stop_mode='events', stop_value=100):
+        self.start_wn = start_wn
+        self.end_wn = end_wn
         self.step_size = step
         self.stop_mode = stop_mode
         self.stop_value = stop_value
@@ -70,12 +70,19 @@ class Scanner(threading.Thread):
         self.start_timestamp = time.time()
 
         # Create range inclusive of max (approx)
-        steps = int(round((self.max_wn - self.min_wn) / self.step_size)) + 1
-        wavenumbers = np.linspace(self.min_wn, self.max_wn, steps)
+        # Create range inclusive of end (approx)
+        # Handle bi-directional scan
+        if self.end_wn >= self.start_wn:
+            sign = 1
+        else:
+            sign = -1
+
+        # Buffer to include endpoint
+        wavenumbers = np.arange(self.start_wn, self.end_wn + sign * self.step_size * 0.1, sign * self.step_size)
         self.total_bins = len(wavenumbers)
         self.bins_completed = 0
 
-        print(f"[Scanner] Starting scan: {len(wavenumbers)} bins from {self.min_wn} to {self.max_wn} cm^-1")
+        print(f"[Scanner] Starting scan: {len(wavenumbers)} bins from {self.start_wn} to {self.end_wn} cm^-1")
 
         try:
             for i, wn in enumerate(wavenumbers):

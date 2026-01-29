@@ -21,23 +21,23 @@ class ParamsWidget(QWidget):
 
         defaults = self.settings_config
 
-        # Min WN
-        layout_params.addWidget(QLabel("Min Wavenumber (cm^-1):"), 0, 0)
-        self.spin_min_wn = QDoubleSpinBox()
-        self.spin_min_wn.setRange(0, 50000)
-        self.spin_min_wn.setValue(defaults.get("min_wn", 16666.0))
-        self.spin_min_wn.setDecimals(6)
-        self.spin_min_wn.setSingleStep(0.000001)
-        layout_params.addWidget(self.spin_min_wn, 0, 1)
+        # Start WN
+        layout_params.addWidget(QLabel("Start WN (cm^-1):"), 0, 0)
+        self.spin_start_wn = QDoubleSpinBox()
+        self.spin_start_wn.setRange(0, 50000)
+        self.spin_start_wn.setValue(defaults.get("start_wn", defaults.get("min_wn", 16666.0)))
+        self.spin_start_wn.setDecimals(6)
+        self.spin_start_wn.setSingleStep(0.000001)
+        layout_params.addWidget(self.spin_start_wn, 0, 1)
 
-        # Max WN
-        layout_params.addWidget(QLabel("Max Wavenumber (cm^-1):"), 1, 0)
-        self.spin_max_wn = QDoubleSpinBox()
-        self.spin_max_wn.setRange(0, 50000)
-        self.spin_max_wn.setValue(defaults.get("max_wn", 16680.0))
-        self.spin_max_wn.setDecimals(6)
-        self.spin_max_wn.setSingleStep(0.000001)
-        layout_params.addWidget(self.spin_max_wn, 1, 1)
+        # End WN
+        layout_params.addWidget(QLabel("End WN (cm^-1):"), 1, 0)
+        self.spin_end_wn = QDoubleSpinBox()
+        self.spin_end_wn.setRange(0, 50000)
+        self.spin_end_wn.setValue(defaults.get("end_wn", defaults.get("max_wn", 16680.0)))
+        self.spin_end_wn.setDecimals(6)
+        self.spin_end_wn.setSingleStep(0.000001)
+        layout_params.addWidget(self.spin_end_wn, 1, 1)
 
         # Step
         layout_params.addWidget(QLabel("Step Size (cm^-1):"), 2, 0)
@@ -73,7 +73,7 @@ class ParamsWidget(QWidget):
         layout.addWidget(grp_params)
 
         self.param_widgets = [
-            self.spin_min_wn, self.spin_max_wn, self.spin_step,
+            self.spin_start_wn, self.spin_end_wn, self.spin_step,
             self.combo_mode, self.spin_stop_val, self.btn_settings
         ]
 
@@ -85,8 +85,8 @@ class ParamsWidget(QWidget):
                 w.setEnabled(enabled)
 
     def get_params(self):
-        min_wn = self.spin_min_wn.value()
-        max_wn = self.spin_max_wn.value()
+        start_wn = self.spin_start_wn.value()
+        end_wn = self.spin_end_wn.value()
         step_size = self.spin_step.value()
         stop_val = self.spin_stop_val.value()
 
@@ -94,15 +94,15 @@ class ParamsWidget(QWidget):
         stop_mode = 'bunches' if mode_idx == 0 else 'time'
 
         return {
-            'min_wn': min_wn,
-            'max_wn': max_wn,
+            'start_wn': start_wn,
+            'end_wn': end_wn,
             'step_size': step_size,
             'stop_mode': stop_mode,
             'stop_val': stop_val,
             # For display/tooltip
             'display': {
-                "Min WN": f"{min_wn:.6f} cm^-1",
-                "Max WN": f"{max_wn:.6f} cm^-1",
+                "Start WN": f"{start_wn:.6f} cm^-1",
+                "End WN": f"{end_wn:.6f} cm^-1",
                 "Step": f"{step_size:.6f} cm^-1",
                 "Mode": stop_mode,
                 "Value": f"{stop_val}"

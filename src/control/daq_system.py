@@ -111,7 +111,7 @@ class DAQSystem:
         self.spec_reader.stop()
         self.multimeter.stop()
 
-    def start_scan(self, min_wn, max_wn, step, stop_mode, stop_value):
+    def start_scan(self, start_wn, end_wn, step, stop_mode, stop_value):
         if not self.scanner.is_alive() and self.scanner.running == False:
             self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
@@ -140,8 +140,8 @@ class DAQSystem:
         metadata = {
             "timestamp": timestamp,
             "scan_parameters": {
-                "min_wn": min_wn,
-                "max_wn": max_wn,
+                "start_wn": start_wn,
+                "end_wn": end_wn,
                 "step_size": step,
                 "stop_mode": stop_mode,
                 "stop_value": stop_value
@@ -161,7 +161,7 @@ class DAQSystem:
         except Exception as e:
             print(f"[DAQ] Failed to save metadata: {e}")
 
-        self.scanner.configure(min_wn, max_wn, step, stop_mode, stop_value)
+        self.scanner.configure(start_wn, end_wn, step, stop_mode, stop_value)
         self.scanner.reset()
         self.tof_buffer = [] # Clear buffer on new scan
 

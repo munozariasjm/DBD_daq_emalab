@@ -1,10 +1,12 @@
 {
     "scan_settings": {
-        "min_wn": 12625.18,
-        "max_wn": 12625.21,
+        "start_wn": 16666.0,
+        "end_wn": 16680.0,
         "step_size": 1e-06,
         "stop_mode": "bunches",
-        "stop_val": 50.0
+        "stop_val": 50.0,
+        "min_wn": 12625.18,
+        "max_wn": 12625.21
     },
     "gui_settings": {
         "window_width": 1200,

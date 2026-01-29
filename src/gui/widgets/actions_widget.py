@@ -34,7 +34,7 @@ class ActionsWidget(QWidget):
         self.btn_stop = QPushButton("Stop Scan")
         self.btn_stop.clicked.connect(self.stop_requested.emit)
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet("background-color: #f44336; color: white;")
+        self.btn_stop.setStyleSheet("background-color: #9E9E9E; color: white;")
         layout_actions.addWidget(self.btn_stop)
 
         self.btn_reset = QPushButton("Reset Scan")
@@ -50,11 +50,12 @@ class ActionsWidget(QWidget):
 
     def update_state(self, is_running, is_paused):
         if is_running:
-            # Change start button to orange when running
             self.btn_start.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
             self.btn_start.setEnabled(True) # Keep enabled to show pop-up
 
             self.btn_stop.setEnabled(True)
+            self.btn_stop.setStyleSheet("background-color: #FF0000; color: white; font-weight: bold;")
+
             self.btn_pause.setEnabled(True)
 
             if is_paused:
@@ -62,10 +63,15 @@ class ActionsWidget(QWidget):
             else:
                 self.btn_pause.setText("Pause Scan")
         else:
-            # Revert start button to green when stopped
             self.btn_start.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+            self.btn_start.setEnabled(True)
+
+            self.btn_stop.setEnabled(False)
+            self.btn_stop.setStyleSheet("background-color: #9E9E9E; color: white;")
+
+            self.btn_pause.setEnabled(False)
+            self.btn_pause.setText("Pause Scan")
             self.btn_start.setEnabled(True)
             self.btn_stop.setEnabled(False)
             self.btn_pause.setEnabled(False)
             self.btn_pause.setText("Pause Scan")
-            # Reset is always enabled per original code update

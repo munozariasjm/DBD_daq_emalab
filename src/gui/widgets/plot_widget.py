@@ -1,27 +1,26 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout)
+from PyQt5.QtWidgets import QWidget, QVBoxLayout
+import pyqtgraph as pg
 import numpy as np
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 
 class PlotWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.axes = {}
-        self.lines = {}
-        self.bars = {}
+        self.plot_items = {} # Map key -> PlotItem
+        self.curves = {}     # Map key -> PlotDataItem (or list of them)
         self.active_options = ['rate', 'scan']
         self.auto_scale = True
+        self.is_dark_mode = False
+
+        self.set_theme(False, layout_rebuild=False)
+
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Canvas ---
-        self.fig = Figure(figsize=(5, 6), dpi=100)
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
-        layout.setStretchFactor(self.canvas, 1)
+        self.layout_widget = pg.GraphicsLayoutWidget()
+        layout.addWidget(self.layout_widget)
 
         self.rebuild_plots()
 
@@ -31,161 +30,143 @@ class PlotWidget(QWidget):
 
     def set_auto_scale(self, enabled):
         self.auto_scale = enabled
-        if enabled:
-            # Trigger an immediate update (or just wait for next tick)
-            # We can force strict limits immediately if we had the last history,
-            # but usually next tick is fine.
-            pass
+        for key, p in self.plot_items.items():
+            if self.auto_scale:
+                p.enableAutoRange(axis=pg.ViewBox.XYAxes)
+            else:
+                 p.disableAutoRange()
+
+    def set_theme(self, is_dark, layout_rebuild=True):
+        self.is_dark_mode = is_dark
+        bg_color = 'k' if is_dark else 'w'
+        fg_color = '#d5d5d5' if is_dark else 'k'
+
+        pg.setConfigOption('background', bg_color)
+        pg.setConfigOption('foreground', fg_color)
+        pg.setConfigOptions(antialias=True)
+
+        if hasattr(self, 'layout_widget'):
+            self.layout_widget.setBackground(bg_color)
+
+        if layout_rebuild:
+            self.rebuild_plots()
 
     def rebuild_plots(self):
-        self.fig.clf()
-        self.axes = {}
-        self.lines = {}
-        self.bars = {}
-
-        active_plots = self.active_options if isinstance(self.active_options, list) else []
+        self.layout_widget.clear()
+        self.plot_items = {}
+        self.curves = {}
 
         if isinstance(self.active_options, dict):
-             if self.active_options.get('rate'): active_plots.append('rate')
-             if self.active_options.get('scan'): active_plots.append('scan')
-             if self.active_options.get('laser'): active_plots.append('laser')
-             if self.active_options.get('volt'): active_plots.append('volt')
-             if self.active_options.get('tof'): active_plots.append('tof')
+            active_list = []
+            if self.active_options.get('rate'): active_list.append('rate')
+            if self.active_options.get('scan'): active_list.append('scan')
+            if self.active_options.get('laser'): active_list.append('laser')
+            if self.active_options.get('volt'): active_list.append('volt')
+            if self.active_options.get('tof'): active_list.append('tof')
+            self.active_options = active_list
 
-        num_plots = len(active_plots)
-        if num_plots == 0:
-            self.canvas.draw()
+        if not self.active_options:
             return
 
-        for i, name in enumerate(active_plots):
-            ax = self.fig.add_subplot(num_plots, 1, i+1)
-            self.axes[name] = ax
+        pen_color = 'g' if self.is_dark_mode else 'g'
 
-            if name == 'rate':
-                ax.set_title("Total Event Rate")
-                ax.set_ylabel("Events/Bunch")
-                self.lines['rate'], = ax.plot([], [], 'g-')
-                ax.grid(True)
-            elif name == 'scan':
-                ax.set_title("Scan Results: Events/Bin")
-                ax.set_xlabel("Wavenumber (cm^-1)")
-                ax.set_ylabel("Rate (Events/Bunch)")
-                self.lines['scan'], = ax.plot([], [], 'b-o')
-                self.lines['scan_cursor'], = ax.plot([], [], 'ro')
-                ax.grid(True)
-            elif name == 'laser':
-                ax.set_title("Wavenumber vs Time")
-                ax.set_ylabel("Wavenumber (cm^-1)")
-                self.lines['laser_curr'], = ax.plot([], [], 'r-', label='Measured (WM)')
-                self.lines['laser_target'], = ax.plot([], [], 'k--', label='Target')
-                ax.legend(loc='upper right')
-                ax.grid(True)
-            elif name == 'volt':
-                ax.set_title("Voltage vs Time")
-                ax.set_ylabel("Voltage (V)")
-                self.lines['volt'], = ax.plot([], [], 'm-')
-                ax.grid(True)
-            elif name == 'tof':
-                ax.set_title("ToF Histogram (Accumulated)")
-                ax.set_xlabel("ToF")
-                ax.set_ylabel("Density")
-                # We use a line plot to represent histogram steps for performance
-                self.lines['tof'], = ax.plot([], [], 'k-', drawstyle='steps-mid')
-                ax.grid(True)
+        for i, key in enumerate(self.active_options):
+            if key == 'rate':
+                p = self.layout_widget.addPlot(row=i, col=0, title="Total Event Rate")
+                p.setLabel('left', "Events/Bunch")
+                p.setLabel('bottom', "Time", units='s')
+                p.getAxis('left').enableAutoSIPrefix(False)
+                p.showGrid(x=True, y=True)
+                curve = p.plot(pen=pg.mkPen(pen_color, width=2))
+                self.plot_items['rate'] = p
+                self.curves['rate'] = curve
 
-        self.fig.tight_layout()
-        self.canvas.draw()
+            elif key == 'scan':
+                p = self.layout_widget.addPlot(row=i, col=0, title="Scan Results: Events/Bin")
+                p.setLabel('bottom', "Wavenumber", units='cm^-1')
+                p.setLabel('left', "Rate", units='Events/Bunch')
+                p.getAxis('left').enableAutoSIPrefix(False)
+                p.getAxis('bottom').enableAutoSIPrefix(False)
+                p.showGrid(x=True, y=True)
+
+                color_scan = 'b' if self.is_dark_mode else 'b'
+                curve = p.plot(pen=pg.mkPen(color_scan, width=2), symbol='o', symbolSize=5, symbolBrush=color_scan, symbolPen=None)
+
+                cursor = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=1, style=pg.QtCore.Qt.DashLine), label='Target')
+                p.addItem(cursor)
+
+                self.plot_items['scan'] = p
+                self.curves['scan'] = curve
+                self.curves['scan_cursor'] = cursor
+
+            elif key == 'laser':
+                p = self.layout_widget.addPlot(row=i, col=0, title="Wavenumber vs Time")
+                p.setLabel('left', "Wavenumber", units='cm^-1')
+                p.setLabel('bottom', "Time", units='s')
+                p.getAxis('left').enableAutoSIPrefix(False)
+                p.showGrid(x=True, y=True)
+                p.addLegend()
+
+                curve_curr = p.plot(pen=pg.mkPen('r', width=2), name='Measured')
+                tgt_color = 'w' if self.is_dark_mode else 'k'
+                curve_target = p.plot(pen=pg.mkPen(tgt_color, width=1, style=pg.QtCore.Qt.DashLine), name='Target')
+
+                self.plot_items['laser'] = p
+                self.curves['laser_curr'] = curve_curr
+                self.curves['laser_target'] = curve_target
+
+            elif key == 'volt':
+                p = self.layout_widget.addPlot(row=i, col=0, title="Voltage vs Time")
+                p.setLabel('left', "Voltage", units='V')
+                p.setLabel('bottom', "Time", units='s')
+                p.showGrid(x=True, y=True)
+                curve = p.plot(pen=pg.mkPen('m', width=2))
+                self.plot_items['volt'] = p
+                self.curves['volt'] = curve
+
+            elif key == 'tof':
+                p = self.layout_widget.addPlot(row=i, col=0, title="ToF Histogram")
+                p.setLabel('bottom', "ToF")
+                p.setLabel('left', "Density")
+                p.showGrid(x=True, y=True)
+                hist_pen = 'w' if self.is_dark_mode else 'k'
+                brush_color = (255, 255, 255, 50) if self.is_dark_mode else (0, 0, 0, 50)
+                curve = p.plot(stepMode=True, fillLevel=0, fillOutline=True, brush=brush_color, pen=hist_pen)
+                self.plot_items['tof'] = p
+                self.curves['tof'] = curve
+
+        self.set_auto_scale(self.auto_scale)
 
     def update_plots(self, history):
         times = history.get('times', [])
-        if not times: return
+        if len(times) == 0: return
 
-        # Rate
-        if 'rate' in self.lines:
-            self.lines['rate'].set_data(times, history['rate'])
-            self.lines['rate'].set_data(times, history['rate'])
-            ax = self.axes['rate']
-            if self.auto_scale:
-                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
-                valid_rates = [r for r in history['rate'] if r is not None]
-                if valid_rates:
-                    ax.set_ylim(0, max(max(valid_rates), 1.0) * 1.2)
+        if 'rate' in self.curves:
+            self.curves['rate'].setData(times, history['rate'])
 
-        # Scan
-        if 'scan' in self.lines:
+        if 'scan' in self.curves:
             scan_data = history.get('scan_data', [])
             if scan_data:
                 wls, rates, _, _ = zip(*scan_data)
-                self.lines['scan'].set_data(wls, rates)
-                self.lines['scan'].set_data(wls, rates)
-                ax = self.axes['scan']
-                if self.auto_scale:
-                    ax.set_xlim(min(wls)-0.1, max(wls)+0.1)
-                    if rates:
-                        ax.set_ylim(0, max(max(rates), 1.0) * 1.2)
+                self.curves['scan'].setData(wls, rates)
+            else:
+                self.curves['scan'].setData([], [])
 
             target_wn_list = history.get('target_wn', [])
-            current_target = target_wn_list[-1] if target_wn_list else 0
-            self.lines['scan_cursor'].set_data([current_target], [0])
+            current_target = target_wn_list[-1] if len(target_wn_list) > 0 else 0
 
-            if scan_data and current_target > 0:
-                ax = self.axes['scan']
-            if scan_data and current_target > 0:
-                ax = self.axes['scan']
-                if self.auto_scale:
-                    # Only re-center on target if auto scaling
-                    # But actually, keeping target in view is good even if not scaling Y?
-                    # No, let's treat "Lock/Auto-Scale" as completely locking the view unless user moves it
-                    # So if auto-scale is OFF, we do NOTHING to limits.
-                    current_xlim = ax.get_xlim()
-                    wls, _, _, _ = zip(*scan_data)
-                    min_x = min(min(wls), current_target) - 0.5
-                    max_x = max(max(wls), current_target) + 0.5
-                    ax.set_xlim(min_x, max_x)
+            self.curves['scan_cursor'].setValue(current_target)
 
-        if 'laser_curr' in self.lines:
-            self.lines['laser_curr'].set_data(times, history['wn'])
-            self.lines['laser_target'].set_data(times, history['target_wn'])
-            ax = self.axes['laser']
-            self.lines['laser_curr'].set_data(times, history['wn'])
-            self.lines['laser_target'].set_data(times, history['target_wn'])
-            ax = self.axes['laser']
+        if 'laser_curr' in self.curves:
+            self.curves['laser_curr'].setData(times, history['wn'])
+            self.curves['laser_target'].setData(times, history['target_wn'])
 
-            if self.auto_scale:
-                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
-                all_wns = [w for w in (list(history['wn']) + list(history['target_wn'])) if w and w > 0]
-                if all_wns:
-                    min_y, max_y = min(all_wns), max(all_wns)
-                    span = max_y - min_y
-                    if span < 0.1: span = 1.0
-                    ax.set_ylim(min_y - span*0.2, max_y + span*0.2)
+        if 'volt' in self.curves:
+            self.curves['volt'].setData(times, history['volt'])
 
-        if 'volt' in self.lines:
-            self.lines['volt'].set_data(times, history['volt'])
-            ax = self.axes['volt']
-            self.lines['volt'].set_data(times, history['volt'])
-            ax = self.axes['volt']
-            if self.auto_scale:
-                ax.set_xlim(max(0, times[-1] - 10), times[-1] + 1)
-                all_volts = list(history['volt'])
-                if all_volts:
-                    min_v, max_v = min(all_volts), max(all_volts)
-                    v_span = max_v - min_v
-                    if v_span < 0.1: v_span = 0.1
-                    ax.set_ylim(min_v - v_span*0.2, max_v + v_span*0.2)
-
-        if 'tof' in self.lines:
+        if 'tof' in self.curves:
             tof_data = history.get('tof_buffer', [])
-            if tof_data and len(tof_data) > 0:
+            if len(tof_data) > 0:
                 counts, bin_edges = np.histogram(tof_data, bins=50, density=True)
-                centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-                self.lines['tof'].set_data(centers, counts)
-                self.lines['tof'].set_data(centers, counts)
-                ax = self.axes['tof']
-                if self.auto_scale:
-                    ax.set_xlim(min(centers), max(centers))
-                    ax.set_ylim(0, max(counts) * 1.1)
-                ax.set_title(f"ToF Histogram ({len(tof_data)} events)")
-
-        self.canvas.draw_idle()
+                self.curves['tof'].setData(bin_edges, counts)
+                self.plot_items['tof'].setTitle(f"ToF Histogram ({len(tof_data)} events)")

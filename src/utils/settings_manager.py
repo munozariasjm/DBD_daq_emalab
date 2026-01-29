@@ -6,11 +6,12 @@ from typing import Dict, Any
 class SettingsManager:
     DEFAULT_SETTINGS = {
         "scan_settings": {
-            "min_wn": 16666.0,
-            "max_wn": 16680.0,
+            "start_wn": 16666.0,
+            "end_wn": 16680.0,
             "step_size": 0.5,
             "stop_mode": "bunches",
-            "stop_val": 100
+            "stop_val": 100,
+            "loops": 1
         },
         "gui_settings": {
             "window_width": 1200,

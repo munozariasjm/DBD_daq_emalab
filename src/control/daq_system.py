@@ -58,25 +58,36 @@ class DAQSystem:
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
 
-        # Initialize Controller (Shared Logic)
+        if hasattr(self.pi_device, 'SVO'):
+             try:
+                 self.pi_device.SVO(1, True)
+             except Exception as e:
+                 print(f"[DAQ] Warning: Failed to enable Servo: {e}")
+
         self.laser = LaserController(self.pi_device, self.epics_client, config=laser_control_settings)
 
-        # Services
+        if simulation_mode:
+            self.wave_reader.source = self.laser
+
         self.saver = None
         self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
-        # State
         self.running = False
         self.events_processed = 0
         self.event_timestamps = deque(maxlen=1000)
 
-        # Thread handles
         self.daq_thread = None
 
-        # Live Rate Counting
         self.pending_events_count = 0
         self.pending_bunches_count = 0
         self.rate_lock = threading.Lock()
+
+        self.cached_voltage = 0.0
+        self.cached_wavenumbers = [0.0] * 4
+        self.cached_spectrum = 0.0
+        self.sensor_lock = threading.Lock()
+
+        self.last_scan_filename = None
 
     def start(self):
         if self.running: return
@@ -98,11 +109,9 @@ class DAQSystem:
         if self.scanner.is_alive():
             self.scanner.stop()
 
-        # Stop Laser Controller
         if hasattr(self.laser, 'stop'):
             self.laser.stop()
 
-        # Ensure saver is stopped if system stops
         if self.saver:
             self.saver.stop()
             self.saver = None
@@ -111,7 +120,7 @@ class DAQSystem:
         self.spec_reader.stop()
         self.multimeter.stop()
 
-    def start_scan(self, min_wn, max_wn, step, stop_mode, stop_value):
+    def start_scan(self, start_wn, end_wn, step, stop_mode, stop_value, loops=1):
         if not self.scanner.is_alive() and self.scanner.running == False:
             self.scanner = Scanner(self.laser, self.wave_reader, wavechannel=self.wavechannel)
 
@@ -119,9 +128,9 @@ class DAQSystem:
              print("[DAQ] Scanner already running.")
              return
 
-        # Start Saver with timestamp
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename_csv = f"data/scan_{timestamp}.csv"
+        self.last_scan_filename = filename_csv
         filename_meta = f"data/scan_{timestamp}_meta.json"
         filename_final = f"data/final_scan_{timestamp}.csv"
 
@@ -136,21 +145,21 @@ class DAQSystem:
         self.saver.start()
         print(f"[DAQ] Started logging to {filename_csv} (Continuous: {save_continuously})")
 
-        # Save Metadata
         metadata = {
             "timestamp": timestamp,
             "scan_parameters": {
-                "min_wn": min_wn,
-                "max_wn": max_wn,
+                "start_wn": start_wn,
+                "end_wn": end_wn,
                 "step_size": step,
                 "stop_mode": stop_mode,
-                "stop_value": stop_value
+                "stop_value": stop_value,
+                "loops": loops,
+                "loops_completed": 0
             },
             "laser_settings": self.config.get("control_settings", {}).get("laser", {}),
             "simulation_settings": self.config.get("simulation_settings", {})
         }
 
-        # We need to grab actual current laser settings if they were updated runtime
         if hasattr(self.laser, 'config'):
              metadata["laser_settings"] = self.laser.config
 
@@ -161,7 +170,7 @@ class DAQSystem:
         except Exception as e:
             print(f"[DAQ] Failed to save metadata: {e}")
 
-        self.scanner.configure(min_wn, max_wn, step, stop_mode, stop_value)
+        self.scanner.configure(start_wn, end_wn, step, stop_mode, stop_value, loops, self._on_loop_complete)
         self.scanner.reset()
         self.tof_buffer = [] # Clear buffer on new scan
 
@@ -171,7 +180,6 @@ class DAQSystem:
         previous_bunch=-1
         previous_bunch2=-1
         while self.running:
-            # Check if scanner finished naturally to stop saver
             if self.saver and not self.scanner.running:
                 print("[DAQ] Scan finished. Stopping saver.")
                 self.saver.stop()
@@ -180,10 +188,14 @@ class DAQSystem:
             data = self.tagger.get_data()
             # print(data)
 
-            # Latest sensors
-            current_voltage = self.multimeter.get_voltage()
-            current_spec = self.spec_reader.spectrum
-            current_wns = self.wave_reader.get_wavenumbers()
+            with self.sensor_lock:
+                self.cached_voltage = self.multimeter.get_voltage()
+                self.cached_spectrum = self.spec_reader.spectrum
+                self.cached_wavenumbers = self.wave_reader.get_wavenumbers()
+
+                current_voltage = self.cached_voltage
+                current_spec = self.cached_spectrum
+                current_wns = self.cached_wavenumbers
 
             for entry in data:
                 channel = entry[2]
@@ -196,7 +208,6 @@ class DAQSystem:
                     if self.scanner.is_accumulating:
                          self.scanner.report_event(is_bunch=True)
 
-                         # Save Bunch Record (captures context even if empty)
                          if self.saver:
                              record = {
                                 'timestamp': timestamp,
@@ -233,7 +244,6 @@ class DAQSystem:
                         'bunch_id': entry[0] # Global ID from tagger
                     }
 
-                    # Only save if accumulating AND saver is active
                     if self.scanner.is_accumulating and self.saver:
                         self.saver.add_event(record)
                         self.tof_buffer.append(entry[3]) # entry[3] is ToF
@@ -267,10 +277,40 @@ class DAQSystem:
              events = self.pending_events_count
              bunches = self.pending_bunches_count
 
-             # Reset counters for next refresh
              self.pending_events_count = 0
              self.pending_bunches_count = 0
 
         if bunches > 0:
             return events / bunches
         return 0.0
+
+    def get_latest_voltage(self):
+        with self.sensor_lock:
+            return self.cached_voltage
+
+    def get_latest_wavenumbers(self):
+        with self.sensor_lock:
+            return list(self.cached_wavenumbers)
+
+    def get_latest_spectrum(self):
+        with self.sensor_lock:
+            return self.cached_spectrum
+
+    def _on_loop_complete(self, loop_number):
+        """Callback from scanner when a loop finishes."""
+        print(f"[DAQ] Loop {loop_number} complete. Saving snapshot.")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"data/scan_snapshot_loop_{loop_number}_{timestamp}.csv"
+
+        try:
+            scan_data = self.scanner.scan_progress
+            if not scan_data:
+                return
+
+            with open(filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Wavenumber_cm-1", "Rate_events_per_bunch", "Total_Events", "Total_Bunches"])
+                writer.writerows(scan_data)
+            print(f"[DAQ] Snapshot saved to {filename}")
+        except Exception as e:
+            print(f"[DAQ] Failed to save snapshot: {e}")

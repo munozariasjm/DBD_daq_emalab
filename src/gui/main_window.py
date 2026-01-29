@@ -30,7 +30,9 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
         self._init_ui()
+        self._init_ui()
         self._init_logic()
+        self.update_counter = 0
 
     def _init_ui(self):
         central = QWidget()
@@ -95,6 +97,8 @@ class MainWindow(QMainWindow):
         self.plot_widget.set_active_plots(self.plot_options_widget.get_options())
         self.plot_widget.set_auto_scale(self.plot_options_widget.chk_auto_scale.isChecked())
 
+        self.was_running = False
+
     def on_start(self):
         status = self.daq.scanner.get_status()
         if status['is_running']:
@@ -102,15 +106,18 @@ class MainWindow(QMainWindow):
                                 "A scan is currently running, either pause it, or stop it.")
             return
 
+        self.on_reset()
+
         params = self.params_widget.get_params()
 
         try:
             self.daq.start_scan(
-                params['min_wn'],
-                params['max_wn'],
+                params['start_wn'],
+                params['end_wn'],
                 params['step_size'],
                 params['stop_mode'],
-                params['stop_val']
+                params['stop_val'],
+                params['loops']
             )
             self.active_display_params = params['display']
 
@@ -119,11 +126,12 @@ class MainWindow(QMainWindow):
             self.current_info_text = info_text
 
             self.scan_settings.update({
-                'min_wn': params['min_wn'],
-                'max_wn': params['max_wn'],
+                'start_wn': params['start_wn'],
+                'end_wn': params['end_wn'],
                 'step_size': params['step_size'],
                 'stop_mode': params['stop_mode'],
-                'stop_val': params['stop_val']
+                'stop_val': params['stop_val'],
+                'loops': params['loops']
             })
             self.settings_manager.save_settings()
 
@@ -136,8 +144,6 @@ class MainWindow(QMainWindow):
         if self.daq.saver:
             self.daq.saver.stop()
             self.daq.saver = None
-
-        self.on_reset()
 
     def on_pause(self):
         status = self.daq.scanner.get_status()
@@ -212,7 +218,9 @@ class MainWindow(QMainWindow):
         target_wn = status['target_wn']
         measured_wn = status['measured_wn']
 
-        volt_val = self.daq.multimeter.get_voltage()
+        # Use cached voltage to avoid blocking GUI
+        # volt_val = self.daq.multimeter.get_voltage()
+        volt_val = self.daq.get_latest_voltage()
 
         self.time_history.append(current_time)
         self.rate_history.append(rate)
@@ -233,6 +241,14 @@ class MainWindow(QMainWindow):
         self.actions_widget.update_state(status['is_running'], status['is_paused'])
 
         self.params_widget.set_enabled(not status['is_running'])
+
+        # Throttling ToF Updates
+        self.update_counter += 1
+        tof_data = None
+
+        if self.update_counter % 10 == 0:
+             tof_data = self.daq.tof_buffer if hasattr(self.daq, 'tof_buffer') else []
+
         history = {
             'times': list(self.time_history),
             'rate': list(self.rate_history),
@@ -240,18 +256,39 @@ class MainWindow(QMainWindow):
             'target_wn': list(self.target_wn_history),
             'volt': list(self.volt_history),
             'scan_data': self.daq.scanner.scan_progress,
-            'tof_buffer': self.daq.tof_buffer if hasattr(self.daq, 'tof_buffer') else []
+            'tof_buffer': tof_data
+        }
+        history = {
+            'times': list(self.time_history),
+            'rate': list(self.rate_history),
+            'wn': list(self.wn_history),
+            'target_wn': list(self.target_wn_history),
+            'volt': list(self.volt_history),
+            'scan_data': self.daq.scanner.scan_progress,
+            'tof_buffer': tof_data
         }
         self.plot_widget.update_plots(history)
+
+        # Detect Scan Completion
+        if self.was_running and not status['is_running']:
+            if not status['is_stopping']: # Natural Completion
+                msg = "Scan Complete Successfully!"
+                if self.daq.last_scan_filename:
+                   msg += f"\n\nData saved to:\n{self.daq.last_scan_filename}"
+
+                QMessageBox.information(self, "Scan Finished", msg)
+
+        self.was_running = status['is_running']
 
     def closeEvent(self, event):
         params = self.params_widget.get_params()
         self.scan_settings.update({
-            'min_wn': params['min_wn'],
-            'max_wn': params['max_wn'],
+            'start_wn': params['start_wn'],
+            'end_wn': params['end_wn'],
             'step_size': params['step_size'],
             'stop_mode': params['stop_mode'],
-            'stop_val': params['stop_val']
+            'stop_val': params['stop_val'],
+            'loops': params['loops']
         })
         self.settings_manager.save_settings()
 

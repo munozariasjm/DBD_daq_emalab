@@ -59,6 +59,13 @@ class MainWindow(QMainWindow):
         self.controls_layout.addWidget(self.actions_widget)
         self.controls_layout.addWidget(self.options_container)
         self.controls_layout.addWidget(self.status_widget)
+
+        # Offline Mode Button
+        from PyQt5.QtWidgets import QPushButton
+        self.btn_offline = QPushButton("Open Offline Viewer")
+        self.btn_offline.clicked.connect(self.open_offline_mode)
+        self.controls_layout.addWidget(self.btn_offline)
+
         self.controls_layout.addStretch()
 
         splitter.addWidget(self.controls_widget)
@@ -294,3 +301,9 @@ class MainWindow(QMainWindow):
 
         self.daq.stop()
         event.accept()
+
+    def open_offline_mode(self):
+        from src.gui.offline_window import OfflineWindow
+        self.offline_window = OfflineWindow()
+        self.offline_window.show()
+

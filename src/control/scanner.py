@@ -20,6 +20,8 @@ class Scanner(threading.Thread):
         self.step_size = 0.5 # cm^-1
         self.stop_mode = 'events' # 'events' or 'time'
         self.stop_value = 100 # count or seconds
+        self.loops = 1
+        self.loop_callback = None
 
         # State
         self.current_wavenumber = 0.0 # Target Wavenumber
@@ -27,6 +29,9 @@ class Scanner(threading.Thread):
         self.accumulated_events = 0
         self.accumulated_bunches = 0
         self.is_accumulating = False # If True, we are in the "Measurement" phase
+
+        # Aggregation
+        self.histogram = {} # wn -> [accum_events, accum_bunches]
 
         # Results (for plotting)
         self.scan_progress = []
@@ -51,6 +56,7 @@ class Scanner(threading.Thread):
     def reset(self):
         """Clears scan progress and internal counters."""
         self.scan_progress = []
+        self.histogram = {}
         self.bins_completed = 0
         self.start_timestamp = 0
         self.accumulated_events = 0
@@ -58,121 +64,179 @@ class Scanner(threading.Thread):
         self.current_bin_index = 0
         print("[Scanner] Scan history reset.")
 
-    def configure(self, start_wn, end_wn, step, stop_mode='events', stop_value=100):
+    def configure(self, start_wn, end_wn, step, stop_mode='events', stop_value=100, loops=1, loop_callback=None):
         self.start_wn = start_wn
         self.end_wn = end_wn
         self.step_size = step
         self.stop_mode = stop_mode
         self.stop_value = stop_value
+        self.loops = loops
+        self.loop_callback = loop_callback
 
     def run(self):
         self.running = True
         self.start_timestamp = time.time()
 
-        # Create range inclusive of max (approx)
-        # Create range inclusive of end (approx)
-        # Handle bi-directional scan
-        if self.end_wn >= self.start_wn:
-            sign = 1
-        else:
-            sign = -1
-
-        # Buffer to include endpoint
-        wavenumbers = np.arange(self.start_wn, self.end_wn + sign * self.step_size * 0.1, sign * self.step_size)
-        self.total_bins = len(wavenumbers)
-        self.bins_completed = 0
-
-        print(f"[Scanner] Starting scan: {len(wavenumbers)} bins from {self.start_wn} to {self.end_wn} cm^-1")
-
         try:
-            for i, wn in enumerate(wavenumbers):
+            # Initialize Histogram if not already
+            if not self.histogram:
+                 self.histogram = {}
+
+            # Loop logic
+            for loop_idx in range(self.loops):
                 if self.stop_event.is_set(): break
-                self.wait_for_pause()
 
-                self.current_bin_index = i
-                self.current_wavenumber = wn
+                print(f"[Scanner] Starting Loop {loop_idx + 1}/{self.loops}...")
 
-                # Bin Loop (Retry logic for drift)
-                while True:
+                # Determine direction for this loop
+                forward = self.end_wn >= self.start_wn
+                is_reversed = (loop_idx % 2 == 1)
+
+                if is_reversed:
+                    loop_start = self.end_wn
+                    loop_end = self.start_wn
+                    sign = -1 if forward else 1
+                else:
+                    loop_start = self.start_wn
+                    loop_end = self.end_wn
+                    sign = 1 if forward else -1
+
+                # Buffer to include endpoint
+                wavenumbers = np.arange(loop_start, loop_end + sign * self.step_size * 0.1, sign * self.step_size)
+
+                # Initial estimate (only first time)
+                if loop_idx == 0:
+                     self.total_bins = len(wavenumbers) * self.loops
+
+                print(f"[Scanner] Generating {len(wavenumbers)} bins. {loop_start} -> {loop_end}")
+
+                for i, wn in enumerate(wavenumbers):
                     if self.stop_event.is_set(): break
+                    self.wait_for_pause()
 
-                    # 1. Move Laser (Ensure target is set and controller is active)
-                    if hasattr(self.laser, 'set_wavenumber'):
-                        self.laser.set_wavenumber(wn)
-                    else:
-                        target_nm = self.wavenumber_to_wavelength(wn)
-                        self.laser.set_wavelength(target_nm)
+                    self.current_bin_index = i
+                    self.current_wavenumber = wn
 
-                    # 2. Wait for stable
-                    while not self.laser.is_stable():
-                        if self.stop_event.is_set(): return
-                        self.wait_for_pause()
-                        time.sleep(0.05)
-
-                    # 3. Start Accumulating
-                    self.accumulated_events = 0
-                    self.accumulated_bunches = 0
-                    self.bin_measured_wns = []
-                    self.is_accumulating = True
-                    self.bin_paused_duration = 0.0
-
-                    start_time = time.time()
-                    bin_complete = False
-
-                    # Accumulation Loop
+                    # Bin Loop (Retry logic for drift)
                     while True:
-                        if self.stop_event.is_set(): return
-                        self.wait_for_pause()
+                        if self.stop_event.is_set(): break
 
-                        if not self.laser.is_stable():
-                            print(f"[Scanner] Drift detected at {wn:.4f}. Resetting bin...")
-                            self.is_accumulating = False
+                        # 1. Move Laser
+                        if hasattr(self.laser, 'set_wavenumber'):
+                            self.laser.set_wavenumber(wn)
+                        else:
+                            target_nm = self.wavenumber_to_wavelength(wn)
+                            self.laser.set_wavelength(target_nm)
+
+                        # 2. Wait for stable
+                        while not self.laser.is_stable():
+                            if self.stop_event.is_set(): return
+                            self.wait_for_pause()
+                            time.sleep(0.05)
+
+                        # 3. Start Accumulating
+                        self.accumulated_events = 0
+                        self.accumulated_bunches = 0
+                        self.bin_measured_wns = []
+                        self.is_accumulating = True
+                        self.bin_paused_duration = 0.0
+
+                        start_time = time.time()
+                        bin_complete = False
+
+                        # Accumulation Loop
+                        while True:
+                            if self.stop_event.is_set(): return
+                            self.wait_for_pause()
+
+                            if not self.laser.is_stable():
+                                print(f"[Scanner] Drift detected at {wn:.4f}. Resetting bin...")
+                                self.is_accumulating = False
+                                break
+
+                            # Check Stop Condition
+                            current_time = time.time()
+                            current_duration = current_time - start_time - self.bin_paused_duration
+
+                            if self.stop_mode == 'events':
+                                if self.accumulated_events >= self.stop_value:
+                                    bin_complete = True
+                                    break
+                            elif self.stop_mode == 'bunches':
+                                if self.accumulated_bunches >= self.stop_value:
+                                    bin_complete = True
+                                    break
+                            elif self.stop_mode == 'time':
+                                if current_duration >= self.stop_value:
+                                    bin_complete = True
+                                    break
+
+                            # Track Measured Wavenumber
+                            if self.wavemeter:
+                                wn_status = self.wavemeter.get_wavenumbers()
+                                if wn_status and wn_status[int(self.wavechannel-1)] > 0:
+                                    self.bin_measured_wns.append(wn_status[int(self.wavechannel-1)])
+
+                            time.sleep(0.005)
+
+                        if bin_complete:
+                            break # Break Retry Loop -> Bin Done
+
+                    # --- Post Bin Processing ---
+                    self.is_accumulating = False
+
+                    total_elapsed = time.time() - start_time
+                    effective_duration = total_elapsed - self.bin_paused_duration
+
+                    # Determine Tolerance (default to 0.01 if not found)
+                    tolerance = 0.01
+                    if hasattr(self.laser, 'tolerance'):
+                        tolerance = self.laser.tolerance
+
+                    # Fuzzy Bin Matching
+                    wn_key = None
+                    # sorted_keys = sorted(self.histogram.keys()) # Optimization: Could just check neighbours if sorted
+                    # But straightforward iteration is safer for now.
+
+                    for existing_key in self.histogram.keys():
+                        if abs(wn - existing_key) <= tolerance:
+                            wn_key = existing_key
                             break
 
-                        # Check Stop Condition
-                        current_time = time.time()
-                        current_duration = current_time - start_time - self.bin_paused_duration
+                    if wn_key is None:
+                        wn_key = round(wn, 6) # Fallback to new bin (rounded)
 
-                        if self.stop_mode == 'events':
-                            if self.accumulated_events >= self.stop_value:
-                                bin_complete = True
-                                break
-                        elif self.stop_mode == 'bunches':
-                            if self.accumulated_bunches >= self.stop_value:
-                                bin_complete = True
-                                break
-                        elif self.stop_mode == 'time':
-                            if current_duration >= self.stop_value:
-                                bin_complete = True
-                                break
+                    # Update Histogram
+                    if wn_key not in self.histogram:
+                        self.histogram[wn_key] = [0, 0]
 
-                        # Track Measured Wavenumber
-                        if self.wavemeter:
-                            wn_status = self.wavemeter.get_wavenumbers()
-                            if wn_status and wn_status[int(self.wavechannel-1)] > 0:
-                                self.bin_measured_wns.append(wn_status[int(self.wavechannel-1)])
+                    self.histogram[wn_key][0] += self.accumulated_events
+                    self.histogram[wn_key][1] += self.accumulated_bunches
 
-                        time.sleep(0.005)
+                    # Recalculate Scan Progress (Sorted List) for GUI
+                    sorted_wns = sorted(self.histogram.keys())
+                    new_progress = []
+                    for w in sorted_wns:
+                        ev = self.histogram[w][0]
+                        bu = self.histogram[w][1]
+                        r = ev / bu if bu > 0 else 0
+                        new_progress.append((w, r, ev, bu))
 
-                    if bin_complete:
-                        break # Break Retry Loop -> Bin Done
+                    self.scan_progress = new_progress
 
-                # 4. Stop Accumulating
-                self.is_accumulating = False
+                    rate_bin = self.accumulated_events / self.accumulated_bunches if self.accumulated_bunches > 0 else 0
+                    print(f"[Scanner] Bin {wn:.6f} done. {self.accumulated_events} ev ({rate_bin:.4f} epb). Total: {self.histogram[wn_key][0]} ev.")
 
-                total_elapsed = time.time() - start_time
-                effective_duration = total_elapsed - self.bin_paused_duration
-                rate = self.accumulated_events / self.accumulated_bunches if self.accumulated_bunches > 0 else 0
+                    self.bins_completed += 1
 
-                # Calculate average measured wavenumber for this bin
-                if self.bin_measured_wns:
-                    avg_wn = sum(self.bin_measured_wns) / len(self.bin_measured_wns)
-                else:
-                    avg_wn = wn # Fallback to target
+                # End of Loop Iteration
+                if self.loop_callback:
+                    print(f"[Scanner] Loop {loop_idx+1} complete. Saving snapshot...")
+                    try:
+                        self.loop_callback(loop_idx + 1)
+                    except Exception as e:
+                        print(f"Callback error: {e}")
 
-                print(f"[Scanner] Bin {wn:.6f} cm^-1 (Avg Measured: {avg_wn:.6f} cm^-1) done. {self.accumulated_events} events, {self.accumulated_bunches} bunches in {effective_duration:.2f}s (effective) ({rate:.4f} epb)")
-                self.scan_progress.append((avg_wn, rate, self.accumulated_events, self.accumulated_bunches))
-                self.bins_completed += 1
             print("[Scanner] Scan complete.")
         except Exception as e:
             print(f"[Scanner] Crashed: {e}")

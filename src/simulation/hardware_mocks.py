@@ -55,12 +55,18 @@ class MockPIGCSDevice:
 
     def qPOS(self, axis=None):
         self._update_physics()
+        # Add tiny jitter to prevent "exact" position checks in specific controllers from failing
+        # (e.g. avoiding 0.0 difference when reversing direction)
+        import random
+        jitter = random.uniform(-1e-8, 1e-8)
+
         with self.lock:
             if axis:
                 if isinstance(axis, list):
-                   return {a: self.position[a] for a in axis}
-                return {axis: self.position[axis]}
-            return self.position.copy()
+                   return {a: self.position[a] + jitter for a in axis}
+                return {axis: self.position[axis] + jitter}
+
+            return {k: v + jitter for k, v in self.position.items()}
 
     def qVEL(self, axis):
          with self.lock:

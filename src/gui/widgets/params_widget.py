@@ -65,16 +65,25 @@ class ParamsWidget(QWidget):
         self.spin_stop_val.setDecimals(1)
         layout_params.addWidget(self.spin_stop_val, 4, 1)
 
+        # Loops
+        layout_params.addWidget(QLabel("Loops:"), 5, 0)
+        self.spin_loops = QDoubleSpinBox() # Using Double to allow integer but re-using style if easier, or QSpinBox
+        from PyQt5.QtWidgets import QSpinBox
+        self.spin_loops = QSpinBox()
+        self.spin_loops.setRange(1, 100)
+        self.spin_loops.setValue(defaults.get("loops", 1))
+        layout_params.addWidget(self.spin_loops, 5, 1)
+
         # Settings Button
         self.btn_settings = QPushButton("Laser Settings...")
         self.btn_settings.clicked.connect(self.settings_requested.emit)
-        layout_params.addWidget(self.btn_settings, 5, 0, 1, 2) # Span 2 columns
+        layout_params.addWidget(self.btn_settings, 6, 0, 1, 2) # Span 2 columns
 
         layout.addWidget(grp_params)
 
         self.param_widgets = [
             self.spin_start_wn, self.spin_end_wn, self.spin_step,
-            self.combo_mode, self.spin_stop_val, self.btn_settings
+            self.combo_mode, self.spin_stop_val, self.spin_loops, self.btn_settings
         ]
 
     def set_enabled(self, enabled):
@@ -89,6 +98,7 @@ class ParamsWidget(QWidget):
         end_wn = self.spin_end_wn.value()
         step_size = self.spin_step.value()
         stop_val = self.spin_stop_val.value()
+        loops = self.spin_loops.value()
 
         mode_idx = self.combo_mode.currentIndex()
         stop_mode = 'bunches' if mode_idx == 0 else 'time'
@@ -99,12 +109,14 @@ class ParamsWidget(QWidget):
             'step_size': step_size,
             'stop_mode': stop_mode,
             'stop_val': stop_val,
+            'loops': loops,
             # For display/tooltip
             'display': {
                 "Start WN": f"{start_wn:.6f} cm^-1",
                 "End WN": f"{end_wn:.6f} cm^-1",
                 "Step": f"{step_size:.6f} cm^-1",
                 "Mode": stop_mode,
-                "Value": f"{stop_val}"
+                "Value": f"{stop_val}",
+                "Loops": f"{loops}"
             }
         }

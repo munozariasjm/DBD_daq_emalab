@@ -1,17 +1,18 @@
 {
     "scan_settings": {
         "start_wn": 16666.0,
-        "end_wn": 16680.0,
-        "step_size": 1e-06,
+        "end_wn": 16667.0,
+        "step_size": 0.3,
         "stop_mode": "bunches",
-        "stop_val": 50.0,
+        "stop_val": 100.0,
+        "loops": 2,
         "min_wn": 12625.18,
         "max_wn": 12625.21
     },
     "gui_settings": {
         "window_width": 1200,
         "window_height": 800,
-        "refresh_rate_ms": 500
+        "refresh_rate_ms": 100
     },
     "data_settings": {
         "default_save_dir": "data",
@@ -20,23 +21,28 @@
     },
     "simulation_settings": {
         "tagger": {
-            "repetition_rate": 50.0,
-            "mean_events_per_bunch": 1.0
+            "repetition_rate": 500.0,
+            "mean_events_per_bunch": 10.0
         },
         "laser": {
-            "move_speed": 10.0,
+            "move_speed": 500.0,
             "noise_level": 0.001
         },
         "multimeter": {
             "noise_level": 0.05
+        },
+        "epics": {
+            "offset": 16666.0,
+            "slope": 5.0,
+            "noise_level": 0.001
         }
     },
     "simulation_mode": true,
     "control_settings": {
         "laser": {
-            "tolerance": 0.0001,
-            "step_fine": 0.0001,
-            "step_coarse": 0.001,
+            "tolerance": 0.05,
+            "step_fine": 0.005,
+            "step_coarse": 0.1,
             "poll_interval": 0.01,
             "required_stable_samples": 4,
             "wavechannel": 1

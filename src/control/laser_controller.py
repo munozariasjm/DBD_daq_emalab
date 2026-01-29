@@ -30,11 +30,6 @@ class LaserController:
         self.stop_event = threading.Event()
         self.control_thread = None
 
-        # Calibration / Initial Guess (from script or manual)
-        # Script uses relative moves mainly, but we need an initial guess for the first move?
-        # The script does:
-        # while wn <= target - 0.01 or wn >= target + 0.01: ...
-
     def update_config(self, config: dict):
         """
         Updates the control loop parameters at runtime.
@@ -125,17 +120,17 @@ class LaserController:
             move_cmd = 0.0
 
             if wn >= self.target_wn + self.tolerance:
-                # Need to increase WN
-                if abs((position + step_fine) - prevpos) > 1e-9:
-                        move_cmd = position + step_fine
-                else:
-                        move_cmd = position - step_coarse
-            else:
-                # Need to decrease WN
+                # WN is too high, need to decrease it (decrease position)
                 if abs((position - step_fine) - prevpos) > 1e-9:
                     move_cmd = position - step_fine
                 else:
                     move_cmd = position + step_coarse
+            else:
+                # WN is too low, need to increase it (increase position)
+                if abs((position + step_fine) - prevpos) > 1e-9:
+                    move_cmd = position + step_fine
+                else:
+                    move_cmd = position - step_coarse
 
             self.device.MOV(self.axis, move_cmd)
 
@@ -144,8 +139,6 @@ class LaserController:
                 break
 
             prevpos = position
-            # Read after move for logging
-            # (Loop will re-read at start for logic)
             print(f"[LaserController] Pos: {position:.5f}, WN: {wn:.4f} (Target: {self.target_wn})")
 
         print(f"[LaserController] Target reached or stopped. Final WN: {wn:.4f}")

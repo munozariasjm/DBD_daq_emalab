@@ -81,25 +81,23 @@ class MockWavenumberReader:
         pass
 
     def get_wnum(self, i=1):
-        if i == 1 and self.source:
-            if hasattr(self.source, 'get_wavenumber'):
-                base = self.source.get_wavenumber()
-            elif hasattr(self.source, 'get_wavelength'):
-                wl = self.source.get_wavelength()
-                if wl > 0:
-                    base = 1e7 / wl
-                else:
-                    base = 16666.6
-            else:
-                 base = 16666.6
-        if i == 3:
-            base = 16666.6
-        else:
-            base = 16666.6 + (i-1) * 1000.0
+        base = 16666.6
+        if self.source:
+             # Check channel if relevant, but for now we just map channel 1 to the source
+             if i == 1:
+                if hasattr(self.source, 'get_wavenumber'):
+                    base = self.source.get_wavenumber()
+                elif hasattr(self.source, 'get_wavelength'):
+                    wl = self.source.get_wavelength()
+                    if wl > 0:
+                        base = 1e7 / wl
+
+        if not self.source and i != 1:
+             # Fallback for other channels or if no source
+             base = 16666.6 + (i-1) * 1000.0
 
         noise = random.uniform(-0.05, 0.05)
         # return round(base + noise, 6)
-        # Return exactly base for testing stability if needed, but noise is realistic.
         return base
 
     def get_wavenumbers(self):

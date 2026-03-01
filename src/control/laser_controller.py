@@ -122,15 +122,15 @@ class LaserController:
             if wn >= self.target_wn + self.tolerance:
                 # WN is too high, need to decrease it (decrease position)
                 if abs((position - step_fine) - prevpos) > 1e-9:
-                    move_cmd = position - step_fine
-                else:
-                    move_cmd = position + step_coarse
-            else:
-                # WN is too low, need to increase it (increase position)
-                if abs((position + step_fine) - prevpos) > 1e-9:
                     move_cmd = position + step_fine
                 else:
                     move_cmd = position - step_coarse
+            else:
+                # WN is too low, need to increase it (increase position)
+                if abs((position + step_fine) - prevpos) > 1e-9:
+                    move_cmd = position - step_fine
+                else:
+                    move_cmd = position +step_coarse
 
             self.device.MOV(self.axis, move_cmd)
 

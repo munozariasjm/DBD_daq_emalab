@@ -45,13 +45,14 @@
             "required_stable_samples": 4,
             "wavechannel": 1,
             "voltage_min": 0.0,
-            "voltage_max": 5.0,
+            "voltage_max": 0.7,
+            "max_voltage_step": 0.05,
             "step_fine": 0.001,
             "step_coarse": 0.005,
             "pid": {
-                "kp": 0.02,
-                "ki": 0.005,
-                "kd": 0.0,
+                "kp": -0.1,
+                "ki": -0.05,
+                "kd": -0.01,
                 "d_filter_coeff": 0.1
             }
         }

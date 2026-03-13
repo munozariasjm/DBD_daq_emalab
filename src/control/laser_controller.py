@@ -27,15 +27,18 @@ class LaserController:
         # Controller mode and voltage limits
         self.controller_mode = self.config.get("controller_mode", "pid")
         self.voltage_min = self.config.get("voltage_min", 0.0)
-        self.voltage_max = self.config.get("voltage_max", 5.0)
+        self.voltage_max = self.config.get("voltage_max", 0.7)
+        self.max_voltage_step = self.config.get("max_voltage_step", 0.05)
 
         # PID controller
         pid_config = self.config.get("pid", {})
         self.pid = PIDController(
-            kp=pid_config.get("kp", 0.02),
-            ki=pid_config.get("ki", 0.005),
-            kd=pid_config.get("kd", 0.0),
+            kp=pid_config.get("kp", -0.1),
+            ki=pid_config.get("ki", -0.05),
+            kd=pid_config.get("kd", -0.01),
             d_filter_coeff=pid_config.get("d_filter_coeff", 0.1),
+            output_min=self.voltage_min,
+            output_max=self.voltage_max,
         )
 
         self.target_wn = 0.0
@@ -64,6 +67,11 @@ class LaserController:
             self.controller_mode = self.config.get("controller_mode", self.controller_mode)
             self.voltage_min = self.config.get("voltage_min", self.voltage_min)
             self.voltage_max = self.config.get("voltage_max", self.voltage_max)
+            self.max_voltage_step = self.config.get("max_voltage_step", 0.05)
+
+            # Update PID limits as well
+            self.pid.output_min = self.voltage_min
+            self.pid.output_max = self.voltage_max
 
             pid_config = self.config.get("pid", {})
             if pid_config:
@@ -137,8 +145,8 @@ class LaserController:
 
     def _compute_pid(self, current_wn, current_voltage):
         """Compute next voltage using PID controller."""
-        adjustment = self.pid.compute(self.target_wn, current_wn, self.poll_interval)
-        return current_voltage + adjustment
+        # The PID output is treated as the target absolute voltage (positional PID).
+        return self.pid.compute(self.target_wn, current_wn, self.poll_interval)
 
     def _clamp_voltage(self, voltage):
         """Clamp voltage to configured limits."""
@@ -181,10 +189,20 @@ class LaserController:
             else:
                 voltage_cmd = self._compute_bangbang(wn, voltage)
 
-            # Clamp voltage to physical limits
+            # 1. Clamp voltage to hardware limits (0.0 - 0.7V)
             clamped = self._clamp_voltage(voltage_cmd)
-            if clamped != voltage_cmd:
+
+            # 2. Apply step size limit (delta <= max_voltage_step) relative to CURRENT voltage
+            delta = clamped - voltage
+            if abs(delta) > self.max_voltage_step:
+                clamped = voltage + (self.max_voltage_step if delta > 0 else -self.max_voltage_step)
                 self.voltage_limited = True
+            elif abs(clamped - voltage_cmd) > 1e-9:
+                # Still limited by hardware clamp even if step was small
+                self.voltage_limited = True
+            else:
+                self.voltage_limited = False
+
             voltage_cmd = clamped
 
             self.device.MOV(self.axis, voltage_cmd)

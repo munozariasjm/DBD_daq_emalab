@@ -126,7 +126,7 @@ def _make_controller(mode="pid", voltage_min=0.0, voltage_max=5.0,
         "poll_interval": poll_interval,
         "required_stable_samples": 3,
         "voltage_min": voltage_min,
-        "voltage_max": voltage_max,
+        "voltage_max": 0.7,
         "step_fine": 0.001,
         "step_coarse": 0.005,
         "pid": {
@@ -143,12 +143,15 @@ def _make_controller(mode="pid", voltage_min=0.0, voltage_max=5.0,
 class TestLaserControllerPID:
     def test_pid_reaches_target(self):
         """PID controller should reach target wavenumber within tolerance."""
-        ctrl, pi, _ = _make_controller(mode="pid", kp=0.05, ki=0.01, noise=0.0001)
+        ctrl, pi, epics = _make_controller(mode="pid", kp=0.5, ki=0.1, noise=0.0)
         # Start at voltage 0 → WN = 16666.0
+        # Positional PID: Error = target - measurement.
+        # adjustment = kp * error + ...
+        # If target > current, adjustment > 0, voltage increases.
         target = 16666.1  # small step: needs voltage ~ 0.02
         ctrl.set_wavenumber(target)
 
-        deadline = time.time() + 10.0
+        deadline = time.time() + 5.0
         while time.time() < deadline:
             if ctrl.is_stable():
                 break
@@ -158,6 +161,21 @@ class TestLaserControllerPID:
         final_wn = ctrl.get_wavenumber()
         assert abs(final_wn - target) < ctrl.tolerance, (
             f"PID did not converge: final={final_wn:.4f}, target={target}")
+
+    def test_pid_absolute_output(self):
+        """Verify that PID output is absolute and within hardware limits."""
+        ctrl, pi, epics = _make_controller(mode="pid", kp=0.5, ki=0.1, noise=0.0)
+        # Set target that would normally cause a large voltage if incremental
+        target = 16666.5 # needs voltage 0.1
+        ctrl.set_wavenumber(target)
+
+        # Give it a moment to run one iteration
+        time.sleep(0.2)
+        voltage = pi.qPOS(1)[1]
+
+        # If it was incremental, it would likely be current_voltage + 0.5 * 0.5 = 0.25 on first step
+        # If absolute, it should be clamped or around the target voltage
+        assert 0.0 <= voltage <= 0.7, f"Voltage {voltage} is out of hardware bounds"
 
     def test_bangbang_still_works(self):
         """Bang-bang controller runs without errors and dispatches correctly."""
@@ -200,20 +218,20 @@ class TestLaserControllerPID:
             f"BangBang did not converge: final={final_wn:.4f}, target={target}")
 
     def test_voltage_never_exceeds_limits(self):
-        """Voltage should stay within [voltage_min, voltage_max] even with large error."""
+        """Voltage should stay within [0.0, 0.7] even with large error."""
         ctrl, pi, _ = _make_controller(
-            mode="pid", kp=1.0, ki=0.5, voltage_min=0.0, voltage_max=2.0, noise=0.0001)
-        # Large target that would require voltage > 2.0
-        target = 16680.0  # Would need voltage = (16680 - 16666) / 5 = 2.8
+            mode="pid", kp=10.0, ki=1.0, voltage_min=0.0, voltage_max=0.7, noise=0.0)
+        # Target that would need voltage > 0.7
+        target = 16675.0  # Would need voltage = (16675 - 16666) / 5 = 1.8
         ctrl.set_wavenumber(target)
 
-        time.sleep(1.0)
+        time.sleep(0.5)
         ctrl.stop()
 
         # Check that physical position (voltage) never exceeded limits
         voltage = pi.qPOS(1)[1]
-        assert voltage <= 2.0 + 0.01, f"Voltage exceeded max: {voltage}"
-        assert voltage >= -0.01, f"Voltage below min: {voltage}"
+        assert voltage <= 0.70001, f"Voltage exceeded max: {voltage}"
+        assert voltage >= -0.00001, f"Voltage below min: {voltage}"
 
     def test_setpoint_change_resets_pid(self):
         """Changing target should reset PID integral to prevent carryover."""

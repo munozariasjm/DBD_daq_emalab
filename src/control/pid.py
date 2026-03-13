@@ -59,6 +59,9 @@ class PIDController:
 
         # --- Sum and clamp ---
         output = p_term + i_term + d_term
+
+        # In this system, the output represents the DESIRED voltage (absolute),
+        # not an increment.
         return self._clamp(output)
 
     def reset(self):

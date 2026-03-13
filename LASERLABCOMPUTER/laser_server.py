@@ -54,6 +54,9 @@ class LaserServerInterface:
                 print(self.pi.qPOS(1)[1])
             else:
                 self.sirah = Sirah.SirahMatisse("USB0::0x17E7::0x0102::24-50-09::INSTR")
+                print(f"[Server] Scan status: {self.sirah.get_scan_status()}")
+                print(f"[Server] Scan position: {self.sirah.get_scan_position()}")
+                print(f"[Server] Scan device: {self.sirah.get_scan_params().device}")
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
@@ -64,10 +67,9 @@ class LaserServerInterface:
             with self.lock:
                 if self.laser:
                     self.pi.MOV(axis, float(target))
-                    time.sleep(0.1) # Critical: Small pause
+                    time.sleep(0.1)
                 else:
-                    print()
-                    self.sirah.ask(f'SCAN:NOW {float(target)}')
+                    self.sirah.set_refcell_position(float(target))
             return True
         except Exception as e:
             print(f"Hardware Error in MOV: {e}")
@@ -78,10 +80,10 @@ class LaserServerInterface:
             with self.lock:
                 if self.laser:
                     val = self.pi.qPOS(axis)[axis]
-                    time.sleep(0.1) # Critical: Small pause after serial talk
+                    time.sleep(0.1)
                 else:
-                    val = self.sirah.ask(f'SCAN:NOW?')
-            return float(val)   
+                    val = self.sirah.get_refcell_position()
+            return float(val)
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")
             return 0.0

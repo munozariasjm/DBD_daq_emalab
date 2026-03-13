@@ -30,7 +30,7 @@ class DAQSystem:
         epics_sim_settings = sim_config.get("epics", {})
         control_config = self.config.get("control_settings", {})
         laser_control_settings = control_config.get("laser", {})
-        self.wavechannel = int(laser_control_settings.get("wavechannel", 3))
+        self.wavechannel = int(laser_control_settings.get("wavechannel", 1))
 
         simulation_mode = self.config.get("simulation_mode", True)
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")

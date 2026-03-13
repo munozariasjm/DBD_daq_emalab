@@ -45,7 +45,7 @@ class LaserControlDialog(QDialog):
         # Wavemeter Channel
         self.channel_spin = QSpinBox()
         self.channel_spin.setRange(1, 4)
-        self.channel_spin.setValue(int(self.settings.get("wavechannel", 3)))
+        self.channel_spin.setValue(int(self.settings.get("wavechannel", 1)))
         self.form_layout.addRow("Wavemeter Channel:", self.channel_spin)
 
         self.layout.addLayout(self.form_layout)

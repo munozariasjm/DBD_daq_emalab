@@ -109,6 +109,11 @@ class PlotWidget(QWidget):
                 p.setLabel('bottom', "Time", units='s')
                 p.getAxis('left').enableAutoSIPrefix(False)
                 p.showGrid(x=True, y=True)
+                # Raw rate: faint trace (only visible when integration is active)
+                curve_raw = p.plot(pen=pg.mkPen(pen_color, width=1, style=pg.QtCore.Qt.DotLine))
+                curve_raw.setOpacity(0.35)
+                self.curves['rate_raw'] = curve_raw
+                # Smoothed / main rate curve
                 curve = p.plot(pen=pg.mkPen(pen_color, width=2))
                 self.curves['rate'] = curve
 
@@ -169,6 +174,13 @@ class PlotWidget(QWidget):
 
         if 'rate' in self.curves:
             self.curves['rate'].setData(times, history['rate'])
+            # Show raw trace if smoothed data is provided
+            rate_raw = history.get('rate_raw')
+            if rate_raw is not None and 'rate_raw' in self.curves:
+                self.curves['rate_raw'].setData(times, rate_raw)
+                self.curves['rate_raw'].show()
+            elif 'rate_raw' in self.curves:
+                self.curves['rate_raw'].hide()
 
         if 'scan' in self.curves:
             scan_data = history.get('scan_data')

@@ -282,12 +282,15 @@ class MainWindow(QMainWindow):
             kernel = np.ones(w) / w
             smoothed = np.convolve(arr, kernel, mode='same')
             plot_rates = smoothed.tolist()
+            plot_rates_raw = raw_rates
         else:
             plot_rates = raw_rates
+            plot_rates_raw = None  # No overlay needed
 
         history = {
             'times': list(self.time_history),
             'rate': plot_rates,
+            'rate_raw': plot_rates_raw,
             'wn': list(self.wn_history),
             'target_wn': list(self.target_wn_history),
             'volt': list(self.volt_history),

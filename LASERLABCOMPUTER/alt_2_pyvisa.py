@@ -4,7 +4,6 @@ import threading
 import time
 from xmlrpc.server import SimpleXMLRPCServer
 from socketserver import ThreadingMixIn
-from pylablib.devices import Sirah
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
@@ -17,8 +16,9 @@ if SIMULATION:
     epics = None
 else:
     try:
-        from pipython import GCSDevice,pitools
+        from pipython import GCSDevice, pitools
         import epics
+        import pyvisa  # Replaced pylablib with the official PyVISA library
     except ImportError as e:
         print(f"[Server] Hardware libraries missing: {e}. Use SIMULATION=1 for testing.")
         sys.exit(1)
@@ -53,45 +53,60 @@ class LaserServerInterface:
                 print("[Server] Servo enabled (Axis 1).")
                 print(self.pi.qPOS(1)[1])
             else:
-                self.sirah = Sirah.SirahMatisse("USB0::0x17E7::0x0102::24-50-09::INSTR")
-                print(f"[Server] Scan status: {self.sirah.get_scan_status()}")
-                print(f"[Server] Scan position: {self.sirah.get_scan_position()}")
-                print(f"[Server] Scan device: {self.sirah.get_scan_params().device}")
+                # Use PyVISA as recommended by the Matisse Programmer's Guide
+                self.rm = pyvisa.ResourceManager()
+                self.sirah = self.rm.open_resource("USB0::0x17E7::0x0102::24-50-09::INSTR")
+                self.sirah.timeout = 5000  # 5000 ms timeout per official guidelines
+
+                # Verify connection using standard Matisse IDN query
+                idn_response = self.sirah.query("IDN?")
+                print(f"[Server] Connected to Matisse: {idn_response.strip()}")
+
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
+            self.sirah = None
+
+    def _parse_matisse_float(self, response):
+        """Parse Matisse response format ':CMD:SUBCMD:<float>' securely."""
+        return float(response.split(':')[-1].strip())
 
     def MOV(self, axis, target):
-        print(f"[CMD] MOV Axis {axis} -> {target}")
-        try:
-            with self.lock:
-                if self.laser:
-                    self.pi.MOV(axis, float(target))
-                    time.sleep(0.1)
-                else:
-                    self.sirah.set_refcell_position(float(target))
-            return True
-        except Exception as e:
-            print(f"Hardware Error in MOV: {e}")
-            return False
+        with self.lock:
+            if self.laser:
+                current = self.pi.qPOS(axis)[axis]
+                print(f"[CMD] MOV Axis {axis}: {current:.5f} -> {float(target):.5f}")
+                self.pi.MOV(axis, float(target))
+                time.sleep(0.1)
+            else:
+                if not self.sirah:
+                    return False
+                # Use PyVISA's query() to read and write() to send commands
+                raw = self.sirah.query('REFCELL:NOW?')
+                current = self._parse_matisse_float(raw)
+                print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
+
+                self.sirah.write(f'REFCELL:NOW {float(target)}')
+        return True
 
     def qPOS(self, axis):
-        try:
-            with self.lock:
-                if self.laser:
-                    val = self.pi.qPOS(axis)[axis]
-                    time.sleep(0.1)
-                else:
-                    val = self.sirah.get_refcell_position()
-            return float(val)
-        except Exception as e:
-            print(f"Hardware Error in qPOS: {e}")
-            return 0.0
+        with self.lock:
+            if self.laser:
+                val = self.pi.qPOS(axis)[axis]
+                time.sleep(0.1)
+            else:
+                if not self.sirah:
+                    return 0.0
+                # Direct string query to the Matisse via PyVISA
+                raw = self.sirah.query('REFCELL:NOW?')
+                val = self._parse_matisse_float(raw)
+            print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
+        return float(val)
 
     def close(self):
         if self.laser:
             self.pi.CloseConnection()
-        else:
+        elif self.sirah:
             self.sirah.close()
 
 if __name__ == "__main__":

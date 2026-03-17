@@ -62,9 +62,9 @@ class LaserServerInterface:
             self.pi = None
 
     def _parse_matisse_float(self, response):
-        """Parse Matisse response format ':CMD:SUBCMD: <float>' to extract the float value."""
-        # e.g. ":SCAN:NOW: 3.500000e-01" -> "3.500000e-01"
-        return float(response.strip().split()[-1])
+        """Parse Matisse response format ':CMD:SUBCMD:<float>' securely."""
+        # Split by the colon and grab the last element to avoid whitespace errors
+        return float(response.split(':')[-1].strip())
 
     def MOV(self, axis, target):
         with self.lock:
@@ -74,10 +74,13 @@ class LaserServerInterface:
                 self.pi.MOV(axis, float(target))
                 time.sleep(0.1)
             else:
-                raw = self.sirah.ask('SCAN:NOW?')
+                # Use REFCELL:NOW? to get the specific reference cell position
+                raw = self.sirah.ask('REFCELL:NOW?')
                 current = self._parse_matisse_float(raw)
                 print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
-                self.sirah.ask(f'SCAN:NOW {float(target)}')
+
+                # Use REFCELL:NOW to set the reference cell position directly
+                self.sirah.ask(f'REFCELL:NOW {float(target)}')
         return True
 
     def qPOS(self, axis):
@@ -86,7 +89,8 @@ class LaserServerInterface:
                 val = self.pi.qPOS(axis)[axis]
                 time.sleep(0.1)
             else:
-                raw = self.sirah.ask('SCAN:NOW?')
+                # Use REFCELL:NOW? instead of SCAN:NOW?
+                raw = self.sirah.ask('REFCELL:NOW?')
                 val = self._parse_matisse_float(raw)
             print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
         return float(val)

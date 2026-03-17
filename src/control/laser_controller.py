@@ -147,7 +147,7 @@ class LaserController:
 
             if self.control_thread and self.control_thread.is_alive():
                 # Loop already running — reset PID with bumpless transfer
-                current_voltage = self.device.qPOS(self.axis)[self.axis]
+                current_voltage = self._get_voltage()
                 print(f"[LaserController] Loop running, soft-reset PID at V={current_voltage:.5f}")
                 self.pid.reset(initial_output=current_voltage)
             else:
@@ -155,7 +155,7 @@ class LaserController:
                 self.stop_event.clear()
                 self._wm_buffer.clear()
                 # Bumpless transfer: initialize PID at current piezo voltage
-                current_voltage = self.device.qPOS(self.axis)[self.axis]
+                current_voltage = self._get_voltage()
                 print(f"[LaserController] Starting new loop, current piezo V={current_voltage:.5f}")
                 self.pid.reset(initial_output=current_voltage)
                 self.is_moving = True
@@ -186,6 +186,11 @@ class LaserController:
         reading = self.get_wavenumber()
         self._wm_buffer.append(reading)
         return sum(self._wm_buffer) / len(self._wm_buffer)
+
+    def _get_voltage(self):
+        """Helper to safely extract voltage from either a local dict or a remote float."""
+        pos = self.device.qPOS(self.axis)
+        return pos if isinstance(pos, float) else pos[self.axis]
 
     def is_stable(self, tolerance=None):
         """
@@ -239,7 +244,7 @@ class LaserController:
         Ramps in max_voltage_step increments to avoid losing laser lock.
         Returns True if a reset was performed.
         """
-        voltage = self.device.qPOS(self.axis)[self.axis]
+        voltage = self._get_voltage()
 
         near_min = voltage < (self.voltage_min + self.auto_reset_margin)
         near_max = voltage > (self.voltage_max - self.auto_reset_margin)
@@ -252,7 +257,7 @@ class LaserController:
 
         target_v = self.auto_reset_target
         while not self.stop_event.is_set():
-            voltage = self.device.qPOS(self.axis)[self.axis]
+            voltage = self._get_voltage()
             diff = target_v - voltage
             if abs(diff) < 0.001:
                 break
@@ -289,7 +294,7 @@ class LaserController:
 
     def _run_control_loop(self):
         wn = self._get_averaged_wavenumber()
-        voltage = self.device.qPOS(self.axis)[self.axis]
+        voltage = self._get_voltage()
         self._prev_voltage = voltage
 
         stable_samples = 0
@@ -298,7 +303,7 @@ class LaserController:
 
         while not self.stop_event.is_set():
             wn = self._get_averaged_wavenumber()
-            voltage = self.device.qPOS(self.axis)[self.axis]
+            voltage = self._get_voltage()
 
             # Compute real elapsed time
             now = time.time()

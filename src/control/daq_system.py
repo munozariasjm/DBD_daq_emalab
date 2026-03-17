@@ -89,9 +89,6 @@ class DAQSystem:
 
         self.last_scan_filename = None
         self.tof_online_mode = False
-        
-        self.rate_integration_bunches = 1
-        self.rate_bunch_history = deque(maxlen=2000)
 
     def start(self):
         if self.running: return
@@ -277,8 +274,7 @@ class DAQSystem:
 
     def get_instant_rate(self):
         """
-        Returns the event rate in Events Per Bunch, averaged since the last call,
-        integrated over the last self.rate_integration_bunches.
+        Returns the event rate in Events Per Bunch, averaged since the last call.
         """
         with self.rate_lock:
              events = self.pending_events_count
@@ -286,22 +282,9 @@ class DAQSystem:
 
              self.pending_events_count = 0
              self.pending_bunches_count = 0
-             
-        if bunches > 0 or events > 0:
-            self.rate_bunch_history.append((events, bunches))
-            
-        total_events = 0
-        total_bunches = 0
-        
-        # Iterate backwards to find the window
-        for ev, bu in reversed(self.rate_bunch_history):
-            total_events += ev
-            total_bunches += bu
-            if total_bunches >= self.rate_integration_bunches:
-                break
-                
-        if total_bunches > 0:
-            return total_events / total_bunches
+
+        if bunches > 0:
+            return events / bunches
         return 0.0
 
     def get_latest_voltage(self):

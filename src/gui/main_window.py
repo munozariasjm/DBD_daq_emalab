@@ -5,6 +5,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 import csv
+import numpy as np
 from src.utils.settings_manager import SettingsManager
 from src.gui.widgets.params_widget import ParamsWidget
 from src.gui.widgets.actions_widget import ActionsWidget
@@ -33,10 +34,7 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._init_logic()
         self.update_counter = 0
-
-        # Initialize integration
-        gui_settings = self.settings_manager.get_section("gui_settings")
-        self.daq.rate_integration_bunches = gui_settings.get("integrate_bunches", 1)
+        self.rate_integration_window = 1
 
     def _init_ui(self):
         central = QWidget()
@@ -109,7 +107,9 @@ class MainWindow(QMainWindow):
         self.plot_options_widget.rate_integration_changed.connect(self._on_rate_integration_changed)
         
         gui_settings = self.settings_manager.get_section("gui_settings")
-        self.plot_options_widget.spin_integrate.setValue(gui_settings.get("integrate_bunches", 1))
+        integrate_val = gui_settings.get("integrate_bunches", 1)
+        self.plot_options_widget.spin_integrate.setValue(integrate_val)
+        self.rate_integration_window = integrate_val
 
         self.plot_widget.set_active_plots(self.plot_options_widget.get_options())
         self.plot_widget.set_auto_scale(self.plot_options_widget.chk_auto_scale.isChecked())
@@ -122,7 +122,7 @@ class MainWindow(QMainWindow):
         self.daq.tof_buffer.clear()
 
     def _on_rate_integration_changed(self, value):
-        self.daq.rate_integration_bunches = value
+        self.rate_integration_window = value
 
     def on_start(self):
         status = self.daq.scanner.get_status()
@@ -274,18 +274,20 @@ class MainWindow(QMainWindow):
         if self.update_counter % 10 == 0:
              tof_data = self.daq.tof_buffer if hasattr(self.daq, 'tof_buffer') else []
 
+        # Apply rolling average smoothing to rate data for plotting
+        raw_rates = list(self.rate_history)
+        w = self.rate_integration_window
+        if w > 1 and len(raw_rates) > 0:
+            arr = np.array(raw_rates, dtype=float)
+            kernel = np.ones(w) / w
+            smoothed = np.convolve(arr, kernel, mode='same')
+            plot_rates = smoothed.tolist()
+        else:
+            plot_rates = raw_rates
+
         history = {
             'times': list(self.time_history),
-            'rate': list(self.rate_history),
-            'wn': list(self.wn_history),
-            'target_wn': list(self.target_wn_history),
-            'volt': list(self.volt_history),
-            'scan_data': self.daq.scanner.scan_progress,
-            'tof_buffer': tof_data
-        }
-        history = {
-            'times': list(self.time_history),
-            'rate': list(self.rate_history),
+            'rate': plot_rates,
             'wn': list(self.wn_history),
             'target_wn': list(self.target_wn_history),
             'volt': list(self.volt_history),

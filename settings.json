@@ -39,9 +39,10 @@
     },
     "control_settings": {
         "laser": {
+            "pid_enabled": true,
             "controller_mode": "pid",
             "tolerance": 0.007,
-            "poll_interval": 0.01,
+            "poll_interval": 0.1,
             "required_stable_samples": 4,
             "wavechannel": 1,
             "voltage_min": 0.0,
@@ -49,11 +50,17 @@
             "max_voltage_step": 0.05,
             "step_fine": 0.001,
             "step_coarse": 0.005,
+            "counterdrift_mode": false,
+            "auto_reset_enabled": true,
+            "auto_reset_margin": 0.05,
+            "auto_reset_target": 0.35,
+            "wm_averaging_samples": 5,
             "pid": {
                 "kp": -0.1,
                 "ki": -0.05,
                 "kd": -0.01,
-                "d_filter_coeff": 0.1
+                "d_filter_coeff": 0.1,
+                "mode": "incremental"
             }
         }
     },

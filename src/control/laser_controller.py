@@ -1,5 +1,6 @@
 import time
 import threading
+from collections import deque
 from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
 from src.control.pid import PIDController
 
@@ -9,6 +10,7 @@ class LaserController:
     via a PI Stage and a Wavemeter (EPICS).
 
     Supports two controller modes: 'pid' and 'bangbang'.
+    Supports counterdrift mode: loop keeps running after reaching target.
     """
     def __init__(self, pi_device, epics_client, axis=1, config: dict = {}):
         self.device = pi_device
@@ -20,7 +22,7 @@ class LaserController:
         self.tolerance = self.config.get("tolerance", 0.01)
         self.step_fine = self.config.get("step_fine", 0.0001)
         self.step_coarse = self.config.get("step_coarse", 0.05)
-        self.poll_interval = self.config.get("poll_interval", 1)
+        self.poll_interval = self.config.get("poll_interval", 0.1)
         self.coarse_approach_thresh = self.config.get("coarse_approach_threshold", 1.0)
         self.required_stable_samples = self.config.get("required_stable_samples", 4)
 
@@ -32,6 +34,7 @@ class LaserController:
 
         # PID controller
         pid_config = self.config.get("pid", {})
+        pid_mode = pid_config.get("mode", "positional")
         self.pid = PIDController(
             kp=pid_config.get("kp", -0.1),
             ki=pid_config.get("ki", -0.05),
@@ -39,12 +42,29 @@ class LaserController:
             d_filter_coeff=pid_config.get("d_filter_coeff", 0.1),
             output_min=self.voltage_min,
             output_max=self.voltage_max,
+            mode=pid_mode,
         )
+
+        # PID enabled (False = external laser control, no MOV commands)
+        self.pid_enabled = self.config.get("pid_enabled", True)
+
+        # Counterdrift mode
+        self.counterdrift_mode = self.config.get("counterdrift_mode", False)
+
+        # Auto-reset settings
+        self.auto_reset_enabled = self.config.get("auto_reset_enabled", False)
+        self.auto_reset_margin = self.config.get("auto_reset_margin", 0.05)
+        self.auto_reset_target = self.config.get("auto_reset_target", 0.35)
+
+        # Wavemeter averaging
+        wm_samples = self.config.get("wm_averaging_samples", 1)
+        self._wm_buffer = deque(maxlen=max(1, wm_samples))
 
         self.target_wn = 0.0
         self.current_wn = 0.0
         self.is_moving = False
         self.voltage_limited = False
+        self._prev_voltage = 0.0
 
         # Threading for the control loop
         self.lock = threading.Lock()
@@ -60,7 +80,7 @@ class LaserController:
             self.tolerance = self.config.get("tolerance", 0.01)
             self.step_fine = self.config.get("step_fine", 0.0001)
             self.step_coarse = self.config.get("step_coarse", 0.05)
-            self.poll_interval = self.config.get("poll_interval", 0.5)
+            self.poll_interval = self.config.get("poll_interval", 0.1)
             self.coarse_approach_thresh = self.config.get("coarse_approach_threshold", 1.0)
             self.required_stable_samples = self.config.get("required_stable_samples", 4)
 
@@ -69,7 +89,21 @@ class LaserController:
             self.voltage_max = self.config.get("voltage_max", self.voltage_max)
             self.max_voltage_step = self.config.get("max_voltage_step", 0.05)
 
-            # Update PID limits as well
+            # PID enabled
+            self.pid_enabled = self.config.get("pid_enabled", self.pid_enabled)
+
+            # Counterdrift & auto-reset
+            self.counterdrift_mode = self.config.get("counterdrift_mode", self.counterdrift_mode)
+            self.auto_reset_enabled = self.config.get("auto_reset_enabled", self.auto_reset_enabled)
+            self.auto_reset_margin = self.config.get("auto_reset_margin", self.auto_reset_margin)
+            self.auto_reset_target = self.config.get("auto_reset_target", self.auto_reset_target)
+
+            # Wavemeter averaging
+            wm_samples = self.config.get("wm_averaging_samples", self._wm_buffer.maxlen)
+            if wm_samples != self._wm_buffer.maxlen:
+                self._wm_buffer = deque(maxlen=max(1, wm_samples))
+
+            # Update PID limits
             self.pid.output_min = self.voltage_min
             self.pid.output_max = self.voltage_max
 
@@ -81,27 +115,55 @@ class LaserController:
                     kd=pid_config.get("kd"),
                     d_filter_coeff=pid_config.get("d_filter_coeff"),
                 )
+                if "mode" in pid_config:
+                    self.pid.mode = pid_config["mode"]
 
             print(f"[LaserController] Config updated: mode={self.controller_mode}, "
-                  f"tol={self.tolerance}, poll={self.poll_interval}")
+                  f"tol={self.tolerance}, poll={self.poll_interval}, "
+                  f"pid_enabled={self.pid_enabled}, counterdrift={self.counterdrift_mode}")
 
     def set_wavenumber(self, target_wn):
         """
         Starts the background control loop to reach target_wn.
+        If loop is already running, updates the target with a soft PID reset
+        (keeps accumulated output, clears derivative state).
+        If pid_enabled is False, just records the target (external GUI controls laser).
         """
         with self.lock:
             self.target_wn = target_wn
-            self.stop_event.clear()
-            self.pid.reset()
             self.voltage_limited = False
 
+            if not self.pid_enabled:
+                self.is_moving = False
+                return
+
             if self.control_thread and self.control_thread.is_alive():
-                 # Already running, just updated target
-                 pass
+                # Loop already running — reset PID with bumpless transfer
+                current_voltage = self.device.qPOS(self.axis)[self.axis]
+                self.pid.reset(initial_output=current_voltage)
             else:
-                 self.is_moving = True
-                 self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
-                 self.control_thread.start()
+                # Start new loop
+                self.stop_event.clear()
+                self._wm_buffer.clear()
+                # Bumpless transfer: initialize PID at current piezo voltage
+                current_voltage = self.device.qPOS(self.axis)[self.axis]
+                self.pid.reset(initial_output=current_voltage)
+                self.is_moving = True
+                self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
+                self.control_thread.start()
+
+    def start_counterdrift(self, target_wn):
+        """Start counterdrift mode: loop runs continuously, correcting drift.
+        If pid_enabled is False, just sets target and counterdrift flag."""
+        with self.lock:
+            self.counterdrift_mode = True
+        self.set_wavenumber(target_wn)
+
+    def stop_counterdrift(self):
+        """Stop counterdrift and the control loop."""
+        with self.lock:
+            self.counterdrift_mode = False
+        self.stop()
 
     def get_wavenumber(self):
         """
@@ -109,14 +171,24 @@ class LaserController:
         """
         return float(self.epics.caget('LaserLab:wavenumber_1'))
 
+    def _get_averaged_wavenumber(self):
+        """Read wavemeter and return rolling average."""
+        reading = self.get_wavenumber()
+        self._wm_buffer.append(reading)
+        return sum(self._wm_buffer) / len(self._wm_buffer)
+
     def is_stable(self, tolerance=None):
         """
         Returns True if current WN is within tolerance of Target WN.
+        If pid_enabled is False or counterdrift mode: wavemeter reading only.
+        Otherwise: also requires control loop to have finished (not is_moving).
         """
         if tolerance is None:
              tolerance = self.tolerance
 
         wn = self.get_wavenumber()
+        if not self.pid_enabled or self.counterdrift_mode:
+            return abs(wn - self.target_wn) < tolerance
         return abs(wn - self.target_wn) < tolerance and not self.is_moving
 
     def stop(self):
@@ -143,49 +215,101 @@ class LaserController:
 
         return voltage_cmd
 
-    def _compute_pid(self, current_wn, current_voltage):
-        """Compute next voltage using PID controller."""
-        # The PID output is treated as the target absolute voltage (positional PID).
-        return self.pid.compute(self.target_wn, current_wn, self.poll_interval)
+    def _compute_pid(self, current_wn, dt):
+        """Compute next voltage using PID controller with real elapsed time."""
+        return self.pid.compute(self.target_wn, current_wn, dt)
 
     def _clamp_voltage(self, voltage):
         """Clamp voltage to configured limits."""
         return max(self.voltage_min, min(self.voltage_max, voltage))
 
+    def _perform_auto_reset(self):
+        """
+        Ramp piezo back to midpoint when near voltage limits.
+        Ramps in max_voltage_step increments to avoid losing laser lock.
+        Returns True if a reset was performed.
+        """
+        voltage = self.device.qPOS(self.axis)[self.axis]
+
+        near_min = voltage < (self.voltage_min + self.auto_reset_margin)
+        near_max = voltage > (self.voltage_max - self.auto_reset_margin)
+
+        if not (near_min or near_max):
+            return False
+
+        print(f"[LaserController] Auto-reset: piezo at {voltage:.4f}V, "
+              f"ramping to {self.auto_reset_target:.4f}V")
+
+        target_v = self.auto_reset_target
+        while not self.stop_event.is_set():
+            voltage = self.device.qPOS(self.axis)[self.axis]
+            diff = target_v - voltage
+            if abs(diff) < 0.001:
+                break
+
+            step = min(self.max_voltage_step, abs(diff))
+            next_v = voltage + (step if diff > 0 else -step)
+            next_v = self._clamp_voltage(next_v)
+            self.device.MOV(self.axis, next_v)
+            # Sleep between steps for network latency (XML-RPC to LASERLABCOMPUTER)
+            time.sleep(max(self.poll_interval, 0.05))
+
+        # Re-initialize PID at new position
+        self.pid.reset(initial_output=self.auto_reset_target)
+        self._wm_buffer.clear()
+        print(f"[LaserController] Auto-reset complete at {self.auto_reset_target:.4f}V")
+        return True
+
     def _control_loop(self):
         """
         Main control loop dispatching to PID or bang-bang strategy.
+        In counterdrift mode, loop continues running after reaching stability.
         """
         print(f"[LaserController] Starting control loop for Target {self.target_wn} "
-              f"(mode={self.controller_mode})")
+              f"(mode={self.controller_mode}, counterdrift={self.counterdrift_mode})")
 
-        wn = self.get_wavenumber()
+        wn = self._get_averaged_wavenumber()
         voltage = self.device.qPOS(self.axis)[self.axis]
         self._prev_voltage = voltage
 
         stable_samples = 0
         REQUIRED_STABLE_SAMPLES = self.required_stable_samples
+        last_time = time.time()
 
         while not self.stop_event.is_set():
-            wn = self.get_wavenumber()
+            wn = self._get_averaged_wavenumber()
             voltage = self.device.qPOS(self.axis)[self.axis]
+
+            # Compute real elapsed time
+            now = time.time()
+            dt = now - last_time
+            last_time = now
 
             # Check stability
             if abs(wn - self.target_wn) < self.tolerance:
                 stable_samples += 1
-                print(f"[LaserController] Within tolerance.. stabilizing "
-                      f"({stable_samples}/{REQUIRED_STABLE_SAMPLES})")
                 if stable_samples >= REQUIRED_STABLE_SAMPLES:
-                    break
+                    if self.counterdrift_mode:
+                        # Stay running, just sleep and continue correcting
+                        self.stop_event.wait(self.poll_interval)
+                        continue
+                    else:
+                        break
 
-                time.sleep(0.5)
+                self.stop_event.wait(self.poll_interval)
                 continue
             else:
                 stable_samples = 0
 
+            # Auto-reset if near piezo voltage limits
+            if self.auto_reset_enabled and self.controller_mode == "pid":
+                if self._perform_auto_reset():
+                    last_time = time.time()
+                    continue
+
             # Dispatch to controller strategy
             if self.controller_mode == "pid":
-                voltage_cmd = self._compute_pid(wn, voltage)
+                voltage_cmd = self._compute_pid(wn, dt)
             else:
                 voltage_cmd = self._compute_bangbang(wn, voltage)
 
@@ -198,7 +322,6 @@ class LaserController:
                 clamped = voltage + (self.max_voltage_step if delta > 0 else -self.max_voltage_step)
                 self.voltage_limited = True
             elif abs(clamped - voltage_cmd) > 1e-9:
-                # Still limited by hardware clamp even if step was small
                 self.voltage_limited = True
             else:
                 self.voltage_limited = False

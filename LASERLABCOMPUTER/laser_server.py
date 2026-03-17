@@ -70,9 +70,11 @@ class LaserServerInterface:
                     self.pi.MOV(axis, float(target))
                     time.sleep(0.1)
                 else:
-                    current = self.sirah.get_refcell_position()
+                    # Reverted to raw string command for retrieving current position
+                    current = float(self.sirah.ask('SCAN:NOW?'))
                     print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
-                    self.sirah.set_refcell_position(float(target))
+                    # Reverted to raw string command for moving
+                    self.sirah.ask(f'SCAN:NOW {float(target)}')
             return True
         except Exception as e:
             print(f"Hardware Error in MOV: {e}")
@@ -85,7 +87,8 @@ class LaserServerInterface:
                     val = self.pi.qPOS(axis)[axis]
                     time.sleep(0.1)
                 else:
-                    val = self.sirah.get_refcell_position()
+                    # Reverted to raw string command for querying position
+                    val = self.sirah.ask('SCAN:NOW?')
                 print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
             return float(val)
         except Exception as e:

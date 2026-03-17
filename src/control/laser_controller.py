@@ -133,13 +133,18 @@ class LaserController:
             self.target_wn = target_wn
             self.voltage_limited = False
 
+            print(f"[LaserController] set_wavenumber({target_wn:.6f}) called "
+                  f"[pid_enabled={self.pid_enabled}]")
+
             if not self.pid_enabled:
+                print(f"[LaserController] PID disabled — skipping control loop")
                 self.is_moving = False
                 return
 
             if self.control_thread and self.control_thread.is_alive():
                 # Loop already running — reset PID with bumpless transfer
                 current_voltage = self.device.qPOS(self.axis)[self.axis]
+                print(f"[LaserController] Loop running, soft-reset PID at V={current_voltage:.5f}")
                 self.pid.reset(initial_output=current_voltage)
             else:
                 # Start new loop
@@ -147,6 +152,7 @@ class LaserController:
                 self._wm_buffer.clear()
                 # Bumpless transfer: initialize PID at current piezo voltage
                 current_voltage = self.device.qPOS(self.axis)[self.axis]
+                print(f"[LaserController] Starting new loop, current piezo V={current_voltage:.5f}")
                 self.pid.reset(initial_output=current_voltage)
                 self.is_moving = True
                 self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
@@ -328,14 +334,14 @@ class LaserController:
 
             voltage_cmd = clamped
 
+            print(f"[LaserController] MOV {voltage_cmd:.5f} "
+                  f"(current={voltage:.5f}, WN={wn:.4f}, target_WN={self.target_wn:.4f})")
             self.device.MOV(self.axis, voltage_cmd)
 
             if self.stop_event.wait(self.poll_interval):
                 break
 
             self._prev_voltage = voltage
-            print(f"[LaserController] V: {voltage:.5f}, WN: {wn:.4f} "
-                  f"(Target: {self.target_wn})")
 
         print(f"[LaserController] Target reached or stopped. Final WN: {wn:.4f}")
         self.is_moving = False

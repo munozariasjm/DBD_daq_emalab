@@ -65,6 +65,8 @@ class Tagger:
         self.init_card()
         self.set_trigger_level(0.5)
         self.set_channel_level(1,-0.2)
+        for channel in range(4):
+            self.set_channel_window(channel,self.starts[channel],self.stops[channel])
         self.set_trigger_falling()
         print('card initialized')
 

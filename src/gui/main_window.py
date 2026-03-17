@@ -34,6 +34,10 @@ class MainWindow(QMainWindow):
         self._init_logic()
         self.update_counter = 0
 
+        # Initialize integration
+        gui_settings = self.settings_manager.get_section("gui_settings")
+        self.daq.rate_integration_bunches = gui_settings.get("integrate_bunches", 1)
+
     def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -102,6 +106,10 @@ class MainWindow(QMainWindow):
         self.plot_options_widget.theme_toggled.connect(self.plot_widget.set_theme)
         self.plot_options_widget.tof_online_toggled.connect(self._on_tof_online_toggled)
         self.plot_options_widget.tof_bins_changed.connect(self.plot_widget.set_tof_bins)
+        self.plot_options_widget.rate_integration_changed.connect(self._on_rate_integration_changed)
+        
+        gui_settings = self.settings_manager.get_section("gui_settings")
+        self.plot_options_widget.spin_integrate.setValue(gui_settings.get("integrate_bunches", 1))
 
         self.plot_widget.set_active_plots(self.plot_options_widget.get_options())
         self.plot_widget.set_auto_scale(self.plot_options_widget.chk_auto_scale.isChecked())
@@ -112,6 +120,9 @@ class MainWindow(QMainWindow):
     def _on_tof_online_toggled(self, enabled):
         self.daq.tof_online_mode = enabled
         self.daq.tof_buffer.clear()
+
+    def _on_rate_integration_changed(self, value):
+        self.daq.rate_integration_bunches = value
 
     def on_start(self):
         status = self.daq.scanner.get_status()
@@ -317,6 +328,11 @@ class MainWindow(QMainWindow):
             'stop_val': params['stop_val'],
             'loops': params['loops']
         })
+        
+        gui_settings = self.settings_manager.get_section("gui_settings")
+        gui_settings['integrate_bunches'] = self.plot_options_widget.spin_integrate.value()
+        self.settings_manager.settings['gui_settings'] = gui_settings
+        
         self.settings_manager.save_settings()
 
         self.daq.stop()

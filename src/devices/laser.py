@@ -16,6 +16,11 @@ if os.environ.get('SIMULATION', '0') == '1':
 import threading
 import xmlrpc.client
 
+class LaserCommError(Exception):
+    """Raised when communication with the laser server fails."""
+    pass
+
+
 class PIGCSDevice:
     def __init__(self, controller_name='', initialization_params: dict = {}):
         self.url = f"http://{LAB_COMPUTER_IP}:{LAB_COMPUTER_PORT}"
@@ -29,13 +34,23 @@ class PIGCSDevice:
         print(f"[RemoteHW] Connected to persistent server proxy at {self.url}")
 
     def MOV(self, axis, target):
-        with self.lock:
-             return self.proxy.MOV(axis, float(target))
+        try:
+            with self.lock:
+                return self.proxy.MOV(axis, float(target))
+        except xmlrpc.client.Fault as e:
+            raise LaserCommError(f"[RemoteHW] Server error in MOV({axis}, {target}): {e.faultString}") from e
+        except Exception as e:
+            raise LaserCommError(f"[RemoteHW] Connection error in MOV({axis}, {target}): {e}") from e
 
     def qPOS(self, axis=None):
-        with self.lock:
-            val = self.proxy.qPOS(axis)
-        return {axis: val} if axis else {1: val}
+        try:
+            with self.lock:
+                val = self.proxy.qPOS(axis)
+            return {axis: val} if axis else {1: val}
+        except xmlrpc.client.Fault as e:
+            raise LaserCommError(f"[RemoteHW] Server error in qPOS({axis}): {e.faultString}") from e
+        except Exception as e:
+            raise LaserCommError(f"[RemoteHW] Connection error in qPOS({axis}): {e}") from e
 
     def waitontarget(self, axis):
         with self.lock:
@@ -102,10 +117,9 @@ class ComClient:
 
     def caget(self, pvname):
         try:
-            # This now uses the thread-local proxy property
-            # return self.pi.proxy.get_epics_wn(pvname)
-            return epics.caget(pvname)
+            val = epics.caget(pvname)
         except Exception as e:
-            # print(pvname)
-            print(f"[EPICS Client Error] {e}")
-            return 0.0
+            raise LaserCommError(f"[EPICS] Failed to read '{pvname}': {e}") from e
+        if val is None:
+            raise LaserCommError(f"[EPICS] No response for '{pvname}' (PV disconnected?)")
+        return val

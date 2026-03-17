@@ -61,39 +61,35 @@ class LaserServerInterface:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
 
+    def _parse_matisse_float(self, response):
+        """Parse Matisse response format ':CMD:SUBCMD: <float>' to extract the float value."""
+        # e.g. ":SCAN:NOW: 3.500000e-01" -> "3.500000e-01"
+        return float(response.strip().split()[-1])
+
     def MOV(self, axis, target):
-        try:
-            with self.lock:
-                if self.laser:
-                    current = self.pi.qPOS(axis)[axis]
-                    print(f"[CMD] MOV Axis {axis}: {current:.5f} -> {float(target):.5f}")
-                    self.pi.MOV(axis, float(target))
-                    time.sleep(0.1)
-                else:
-                    # Reverted to raw string command for retrieving current position
-                    current = float(self.sirah.ask('SCAN:NOW?'))
-                    print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
-                    # Reverted to raw string command for moving
-                    self.sirah.ask(f'SCAN:NOW {float(target)}')
-            return True
-        except Exception as e:
-            print(f"Hardware Error in MOV: {e}")
-            return False
+        with self.lock:
+            if self.laser:
+                current = self.pi.qPOS(axis)[axis]
+                print(f"[CMD] MOV Axis {axis}: {current:.5f} -> {float(target):.5f}")
+                self.pi.MOV(axis, float(target))
+                time.sleep(0.1)
+            else:
+                raw = self.sirah.ask('SCAN:NOW?')
+                current = self._parse_matisse_float(raw)
+                print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
+                self.sirah.ask(f'SCAN:NOW {float(target)}')
+        return True
 
     def qPOS(self, axis):
-        try:
-            with self.lock:
-                if self.laser:
-                    val = self.pi.qPOS(axis)[axis]
-                    time.sleep(0.1)
-                else:
-                    # Reverted to raw string command for querying position
-                    val = self.sirah.ask('SCAN:NOW?')
-                print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
-            return float(val)
-        except Exception as e:
-            print(f"Hardware Error in qPOS: {e}")
-            return 0.0
+        with self.lock:
+            if self.laser:
+                val = self.pi.qPOS(axis)[axis]
+                time.sleep(0.1)
+            else:
+                raw = self.sirah.ask('SCAN:NOW?')
+                val = self._parse_matisse_float(raw)
+            print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
+        return float(val)
 
     def close(self):
         if self.laser:

@@ -7,6 +7,7 @@ class PlotOptionsWidget(QWidget):
     theme_toggled = pyqtSignal(bool) # True = Dark, False = Light
     tof_online_toggled = pyqtSignal(bool)
     tof_bins_changed = pyqtSignal(int)
+    rate_integration_changed = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,6 +44,17 @@ class PlotOptionsWidget(QWidget):
         self.add_item('tof', "ToF Histogram", checked=False)
 
         layout_opts.addWidget(self.list_widget)
+
+        # Rate Integration configuration
+        integration_row = QHBoxLayout()
+        integration_row.addWidget(QLabel("Rate Integration (Bunches):"))
+        self.spin_integrate = QSpinBox()
+        self.spin_integrate.setRange(1, 10000)
+        self.spin_integrate.setValue(1)
+        self.spin_integrate.valueChanged.connect(self.rate_integration_changed.emit)
+        integration_row.addWidget(self.spin_integrate)
+        layout_opts.addLayout(integration_row)
+
         layout.addWidget(grp_opts)
 
         grp_tof = QGroupBox("ToF Settings")

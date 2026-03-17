@@ -3,6 +3,7 @@ import threading
 from collections import deque
 from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
 from src.control.pid import PIDController
+from src.devices.laser import LaserCommError
 
 class LaserController:
     """
@@ -65,6 +66,7 @@ class LaserController:
         self.is_moving = False
         self.voltage_limited = False
         self._prev_voltage = 0.0
+        self.comm_error = None  # Set to error message string on communication failure
 
         # Threading for the control loop
         self.lock = threading.Lock()
@@ -128,10 +130,12 @@ class LaserController:
         If loop is already running, updates the target with a soft PID reset
         (keeps accumulated output, clears derivative state).
         If pid_enabled is False, just records the target (external GUI controls laser).
+        Raises LaserCommError if communication with the laser server fails.
         """
         with self.lock:
             self.target_wn = target_wn
             self.voltage_limited = False
+            self.comm_error = None
 
             print(f"[LaserController] set_wavenumber({target_wn:.6f}) called "
                   f"[pid_enabled={self.pid_enabled}]")
@@ -270,10 +274,20 @@ class LaserController:
         """
         Main control loop dispatching to PID or bang-bang strategy.
         In counterdrift mode, loop continues running after reaching stability.
+        Sets self.comm_error and stops on communication failure.
         """
         print(f"[LaserController] Starting control loop for Target {self.target_wn} "
               f"(mode={self.controller_mode}, counterdrift={self.counterdrift_mode})")
 
+        try:
+            self._run_control_loop()
+        except LaserCommError as e:
+            print(f"[LaserController] COMMUNICATION ERROR — loop stopped: {e}")
+            self.comm_error = str(e)
+        finally:
+            self.is_moving = False
+
+    def _run_control_loop(self):
         wn = self._get_averaged_wavenumber()
         voltage = self.device.qPOS(self.axis)[self.axis]
         self._prev_voltage = voltage
@@ -344,7 +358,6 @@ class LaserController:
             self._prev_voltage = voltage
 
         print(f"[LaserController] Target reached or stopped. Final WN: {wn:.4f}")
-        self.is_moving = False
 
 if __name__ == "__main__":
     pass

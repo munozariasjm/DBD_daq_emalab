@@ -119,7 +119,6 @@ class WavenumberReader:
         try:
         
             wn = round(float(wavenumbers_pvs[i - 1].get()), 5)
-            print(wn)
             return wn
         except Exception as e:
             # print(f"Error getting wavenumber: {e}")

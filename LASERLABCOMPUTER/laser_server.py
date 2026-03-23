@@ -80,8 +80,7 @@ class LaserServerInterface:
                     val = self.pi.qPOS(axis)[axis]
                     time.sleep(0.5) # Critical: Small pause after serial talk
                 else:
-                    #val = self.sirah.ask(f'SCAN:NOW?')
-                    print("error qpos")
+                    val = self.sirah.ask(f'SCAN:NOW?')
             return float(val)   
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")

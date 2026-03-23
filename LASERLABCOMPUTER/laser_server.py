@@ -37,8 +37,6 @@ class LaserServerInterface:
     def __init__(self):
         self.lock = threading.Lock()
         self.laser = False
-        self.pi = None
-        self.sirah = None
         try:
             print(f"[Server] Initializing {CONTROLLERNAME}...")
             if SIMULATION:
@@ -56,31 +54,19 @@ class LaserServerInterface:
                 print(self.pi.qPOS(1)[1])
             else:
                 self.sirah = Sirah.SirahMatisse("USB0::0x17E7::0x0102::24-50-09::INSTR")
-                print(f"[Server] Scan status: {self.sirah.get_scan_status()}")
-                print(f"[Server] Scan position: {self.sirah.get_scan_position()}")
-                print(f"[Server] Scan device: {self.sirah.get_scan_params().device}")
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
-            self.sirah = None
 
     def MOV(self, axis, target):
+        print(f"[CMD] MOV Axis {axis} -> {target}")
         try:
             with self.lock:
                 if self.laser:
-                    if self.pi is None:
-                        print("[MOV] Error: PI device not initialized")
-                        return False
-                    current = self.pi.qPOS(axis)[axis]
-                    print(f"[CMD] MOV Axis {axis}: {current:.5f} -> {float(target):.5f}")
                     self.pi.MOV(axis, float(target))
-                    time.sleep(0.1)
+                    time.sleep(0.5) # Critical: Small pause
                 else:
-                    if self.sirah is None:
-                        print("[MOV] Error: Sirah device not initialized")
-                        return False
-                    current = float(self.sirah.ask('SCAN:NOW?'))
-                    print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
+                    print()
                     self.sirah.ask(f'SCAN:NOW {float(target)}')
             return True
         except Exception as e:
@@ -91,18 +77,12 @@ class LaserServerInterface:
         try:
             with self.lock:
                 if self.laser:
-                    if self.pi is None:
-                        print("[qPOS] Error: PI device not initialized")
-                        return 0.0
                     val = self.pi.qPOS(axis)[axis]
-                    time.sleep(0.1)
+                    time.sleep(0.5) # Critical: Small pause after serial talk
                 else:
-                    if self.sirah is None:
-                        print("[qPOS] Error: Sirah device not initialized")
-                        return 0.0
-                    val = self.sirah.ask('SCAN:NOW?')
-                print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
-            return float(val)
+                    #val = self.sirah.ask(f'SCAN:NOW?')
+                    print("error qpos")
+            return float(val)   
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")
             return 0.0

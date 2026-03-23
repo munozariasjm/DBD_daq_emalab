@@ -57,7 +57,7 @@ class PlotOptionsWidget(QWidget):
         bins_row = QHBoxLayout()
         bins_row.addWidget(QLabel("Bins:"))
         self.spin_tof_bins = QSpinBox()
-        self.spin_tof_bins.setRange(10, 500)
+        self.spin_tof_bins.setRange(10, 1000)
         self.spin_tof_bins.setValue(50)
         self.spin_tof_bins.valueChanged.connect(self.tof_bins_changed.emit)
         bins_row.addWidget(self.spin_tof_bins)

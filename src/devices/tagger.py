@@ -41,8 +41,8 @@ def compute_tof_from_data(data: pd.DataFrame):
             tofs.append(flops_to_time(tof))
     return np.array(tofs)
 
-INIT_TIME = 1e-9
-STOP_TIME_WINDOW = 3e-4
+INIT_TIME = 1e-6
+STOP_TIME_WINDOW = 15e-6
 
 class Tagger:
     """

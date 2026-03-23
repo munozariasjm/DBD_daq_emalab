@@ -125,8 +125,7 @@ class LaserController:
     def set_wavenumber(self, target_wn):
         """
         Starts the background control loop to reach target_wn.
-        If loop is already running, updates the target with a soft PID reset
-        (keeps accumulated output, clears derivative state).
+        If loop is already running, just updates the target.
         If pid_enabled is False, just records the target (external GUI controls laser).
         """
         with self.lock:
@@ -142,18 +141,14 @@ class LaserController:
                 return
 
             if self.control_thread and self.control_thread.is_alive():
-                # Loop already running — reset PID with bumpless transfer
-                current_voltage = self.device.qPOS(self.axis)[self.axis]
-                print(f"[LaserController] Loop running, soft-reset PID at V={current_voltage:.5f}")
-                self.pid.reset(initial_output=current_voltage)
+                # Loop already running — just update target, PID adapts naturally
+                self.pid.soft_reset()
+                print(f"[LaserController] Loop running, updated target to {target_wn:.6f}")
             else:
-                # Start new loop
+                # Start new loop — PID reset happens at start of _control_loop
                 self.stop_event.clear()
                 self._wm_buffer.clear()
-                # Bumpless transfer: initialize PID at current piezo voltage
-                current_voltage = self.device.qPOS(self.axis)[self.axis]
-                print(f"[LaserController] Starting new loop, current piezo V={current_voltage:.5f}")
-                self.pid.reset(initial_output=current_voltage)
+                self.pid.reset()
                 self.is_moving = True
                 self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
                 self.control_thread.start()
@@ -277,6 +272,10 @@ class LaserController:
         wn = self._get_averaged_wavenumber()
         voltage = self.device.qPOS(self.axis)[self.axis]
         self._prev_voltage = voltage
+
+        # Bumpless transfer: initialize PID at current position
+        self.pid.reset(initial_output=voltage)
+        print(f"[LaserController] Initial position: V={voltage:.5f}, WN={wn:.4f}")
 
         stable_samples = 0
         REQUIRED_STABLE_SAMPLES = self.required_stable_samples

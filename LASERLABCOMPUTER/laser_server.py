@@ -37,6 +37,8 @@ class LaserServerInterface:
     def __init__(self):
         self.lock = threading.Lock()
         self.laser = False
+        self.pi = None
+        self.sirah = None
         try:
             print(f"[Server] Initializing {CONTROLLERNAME}...")
             if SIMULATION:
@@ -60,20 +62,25 @@ class LaserServerInterface:
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
+            self.sirah = None
 
     def MOV(self, axis, target):
         try:
             with self.lock:
                 if self.laser:
+                    if self.pi is None:
+                        print("[MOV] Error: PI device not initialized")
+                        return False
                     current = self.pi.qPOS(axis)[axis]
                     print(f"[CMD] MOV Axis {axis}: {current:.5f} -> {float(target):.5f}")
                     self.pi.MOV(axis, float(target))
                     time.sleep(0.1)
                 else:
-                    # Reverted to raw string command for retrieving current position
+                    if self.sirah is None:
+                        print("[MOV] Error: Sirah device not initialized")
+                        return False
                     current = float(self.sirah.ask('SCAN:NOW?'))
                     print(f"[CMD] MOV refcell: {current:.5f} -> {float(target):.5f}")
-                    # Reverted to raw string command for moving
                     self.sirah.ask(f'SCAN:NOW {float(target)}')
             return True
         except Exception as e:
@@ -84,10 +91,15 @@ class LaserServerInterface:
         try:
             with self.lock:
                 if self.laser:
+                    if self.pi is None:
+                        print("[qPOS] Error: PI device not initialized")
+                        return 0.0
                     val = self.pi.qPOS(axis)[axis]
                     time.sleep(0.1)
                 else:
-                    # Reverted to raw string command for querying position
+                    if self.sirah is None:
+                        print("[qPOS] Error: Sirah device not initialized")
+                        return 0.0
                     val = self.sirah.ask('SCAN:NOW?')
                 print(f"[CMD] qPOS Axis {axis}: {float(val):.5f}")
             return float(val)

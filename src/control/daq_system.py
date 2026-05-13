@@ -77,6 +77,13 @@ class DAQSystem:
         self.pending_events_count = 0
         self.pending_bunches_count = 0
         self.rate_lock = threading.Lock()
+        # First get_instant_rate() call after start() covers the entire
+        # window between tagger.start_reading() and the first GUI poll —
+        # many seconds of backlog. The events/bunches ratio is real but it's
+        # plotted as a single point at t=0, which looks like a spike. Tare
+        # the first sample to 0 so the rate plot only shows GUI-refresh-
+        # window rates.
+        self._rate_primed = False
 
         self.cached_voltage = 0.0
         self.cached_wavenumbers = [0.0] * 4
@@ -91,6 +98,11 @@ class DAQSystem:
         print("[DAQ] Starting system...")
         self.running = True
         self.tof_buffer = deque(maxlen=50000)
+        # Reset the tare so a stop/start cycle re-primes the rate plot.
+        with self.rate_lock:
+            self.pending_events_count = 0
+            self.pending_bunches_count = 0
+        self._rate_primed = False
 
         self.spec_reader.start()
         self.multimeter.start()
@@ -279,6 +291,13 @@ class DAQSystem:
     def get_instant_rate(self):
         """
         Returns the event rate in Events Per Bunch, averaged since the last call.
+
+        The first call after start() is discarded (returns 0): it would cover
+        the multi-second window between tagger.start_reading() and the first
+        GUI poll, which gets plotted as a single point at t=0 and looks like
+        a spike (e.g. ~100 epb on a beam with high event multiplicity).
+        Subsequent calls cover the GUI refresh interval (~100 ms) and reflect
+        the current rate accurately.
         """
         with self.rate_lock:
              events = self.pending_events_count
@@ -286,6 +305,10 @@ class DAQSystem:
 
              self.pending_events_count = 0
              self.pending_bunches_count = 0
+
+        if not self._rate_primed:
+            self._rate_primed = True
+            return 0.0
 
         if bunches > 0:
             return events / bunches

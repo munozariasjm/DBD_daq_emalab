@@ -1,126 +1,166 @@
-import time
+"""Simulation stand-ins for the Matisse laser and the EPICS wavemeter.
+
+`MockMatisseDevice` mimics the Sirah.SirahMatisse handle: it accepts MCP
+commands via ask(cmd) -> str and maintains the small bit of internal state
+needed to satisfy the controller's CounterDrift / GoTo sequence.
+
+`MockEpicsClient` queries the same MockMatisseDevice for the simulated
+wavenumber so the wavemeter readback stays consistent with whatever the
+fake laser is doing.
+"""
+
+import random
 import threading
-from collections import OrderedDict
+import time
 
-# Mock pipython.GCSDevice
-class MockPIGCSDevice:
+from src.utils.units import nm_vacuum_to_wn, wn_to_nm_vacuum
+
+
+class MockMatisseDevice:
+    """Stand-in for `pylablib.devices.Sirah.SirahMatisse`.
+
+    Public surface that the server uses: `ask(cmd) -> str` and `close()`.
+    Public surface that the EPICS mock reads: `sim_wn` (cm^-1).
     """
-    Mocks the behavior of pipython.GCSDevice.
-    """
-    def __init__(self, controller_name='', initialization_params: dict = {}):
-        self.controller_name = controller_name
-        self.connected = False
-        self.axes = [1] # Simulating 1 axis
-        self.servo_state = {axis: False for axis in self.axes}
-        self.position = {axis: 0.0 for axis in self.axes} # mm
-        self.target_position = {axis: 0.0 for axis in self.axes} # mm
-        self.velocity = {axis: 0.0 for axis in self.axes}
 
-        # Physics simulation
-        self.last_update = time.time()
-        self.sim_speed = initialization_params.get("move_speed", 0.5) # mm/s
-        self.lock = threading.Lock()
+    def __init__(self, initialization_params: dict = {}):
+        self._lock = threading.Lock()
+        # Simulated laser state
+        self.sim_wn = float(initialization_params.get("initial_wn", 12625.0))
+        self._cd_active = False
+        self._cd_setpoint_nm = wn_to_nm_vacuum(self.sim_wn)
+        self._goto_target_nm = wn_to_nm_vacuum(self.sim_wn)
+        self._goto_running = False
+        self._cd_dialog_open = False
+        self._goto_dialog_open = False
+        # Slew dynamics (cm^-1 per second toward target when active)
+        self._slew_rate = float(initialization_params.get("slew_rate", 50.0))
+        self._last_update = time.time()
+        # Wavemeter noise (cm^-1)
+        self.noise = float(initialization_params.get("noise_level", 1e-6))
 
-    def __enter__(self):
-        return self
+    # ---- Sim physics ----
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.CloseConnection()
+    def _advance(self):
+        now = time.time()
+        dt = max(0.0, now - self._last_update)
+        self._last_update = now
+        target_wn = None
+        if self._goto_running:
+            target_wn = nm_vacuum_to_wn(self._goto_target_nm)
+        elif self._cd_active:
+            target_wn = nm_vacuum_to_wn(self._cd_setpoint_nm)
+        if target_wn is None:
+            return
+        diff = target_wn - self.sim_wn
+        step = self._slew_rate * dt
+        if abs(diff) <= step:
+            self.sim_wn = target_wn
+            if self._goto_running:
+                self._goto_running = False
+        else:
+            self.sim_wn += step if diff > 0 else -step
 
-    def ConnectRS232(self, comport, baudrate):
-        self.connected = True
-        print(f"[MockPI] Connected to {self.controller_name} on COM{comport} @ {baudrate}")
+    # ---- MCP command dispatcher ----
 
-    def CloseConnection(self):
-        self.connected = False
-        print("[MockPI] Connection Closed.")
+    def ask(self, cmd: str) -> str:
+        with self._lock:
+            self._advance()
+            parts = cmd.strip().split()
+            if not parts:
+                return "Ok"
+            head = parts[0]
+            if head == "MCP_WM_CounterDrift":
+                self._cd_dialog_open = True
+                return "Ok"
+            if head == "MCP_WM_GotoPosition":
+                self._goto_dialog_open = True
+                return "Ok"
+            if head == "MCP_WM_GET_WAVELENGTH":
+                return f"{wn_to_nm_vacuum(self.sim_wn):.8f}"
+            if head == "MCP_WM.Counterdrift":
+                sub = parts[1] if len(parts) > 1 else ""
+                if sub == "Setpoint" and len(parts) >= 3:
+                    self._cd_setpoint_nm = float(parts[2])
+                    return "Ok"
+                if sub == "Activate" and len(parts) >= 3:
+                    self._cd_active = parts[2].lower() == "true"
+                    return "Ok"
+            if head == "MCP_WM.GoTo":
+                sub = parts[1] if len(parts) > 1 else ""
+                if sub == "Goto" and len(parts) >= 3:
+                    self._goto_target_nm = float(parts[2])
+                    return "Ok"
+                if sub == "Start":
+                    self._goto_running = True
+                    return "Ok"
+                if sub == "Stop":
+                    self._goto_running = False
+                    return "Ok"
+                if sub == "status":
+                    return "RUNNING" if self._goto_running else "STOP"
+            return "Ok"
 
-    def qIDN(self):
-        return "Physik Instrumente, MOCK-CONTROLLER, 12345, 1.0"
+    def close(self):
+        with self._lock:
+            self._cd_active = False
+            self._goto_running = False
 
-    def SVO(self, axis, state):
-        with self.lock:
-            self.servo_state[axis] = bool(state)
-            print(f"[MockPI] Axis {axis} Servo {'ON' if state else 'OFF'}")
+    # ---- High-level API mirroring MatisseDevice (XML-RPC client) ----
+    # These let the simulation DAQSystem use this mock directly without going
+    # through laser_server.py / XML-RPC. Each forwards to ask().
 
-    def MOV(self, axis, target):
-        with self.lock:
-            if not self.servo_state.get(axis, False):
-                print(f"[MockPI] Warning: MOV called on Axis {axis} but Servo is OFF")
-                return
-            self.target_position[axis] = float(target)
-            # Instant update for now, or we can simulate movement time in qPOS
-            # The real script loops waitontarget, so we should separate target from actual
-            # nicely done in the update method.
+    def cd_open(self) -> bool:
+        self.ask("MCP_WM_CounterDrift")
+        return True
 
-    def qPOS(self, axis=None):
-        self._update_physics()
-        # Add tiny jitter to prevent "exact" position checks in specific controllers from failing
-        # (e.g. avoiding 0.0 difference when reversing direction)
-        import random
-        jitter = random.uniform(-1e-8, 1e-8)
+    def cd_setpoint(self, nm: float) -> bool:
+        self.ask(f"MCP_WM.Counterdrift Setpoint {float(nm)}")
+        return True
 
-        with self.lock:
-            if axis:
-                if isinstance(axis, list):
-                   return {a: self.position[a] + jitter for a in axis}
-                return {axis: self.position[axis] + jitter}
+    def cd_activate(self, state: bool) -> bool:
+        self.ask(f"MCP_WM.Counterdrift Activate {'true' if state else 'false'}")
+        return True
 
-            return {k: v + jitter for k, v in self.position.items()}
+    def cd_get_wavelength(self) -> float:
+        reply = self.ask("MCP_WM_GET_WAVELENGTH")
+        return float(reply.split()[0]) if reply else 0.0
 
-    def qVEL(self, axis):
-         with self.lock:
-             return {axis: self.sim_speed}
+    def goto_open(self) -> bool:
+        self.ask("MCP_WM_GotoPosition")
+        return True
 
-    def _update_physics(self):
-        with self.lock:
-            now = time.time()
-            dt = now - self.last_update
-            self.last_update = now
+    def goto_set(self, nm: float) -> bool:
+        self.ask(f"MCP_WM.GoTo Goto {float(nm)}")
+        return True
 
-            for a in self.axes:
-                diff = self.target_position[a] - self.position[a]
-                if abs(diff) < 1e-6:
-                    self.position[a] = self.target_position[a]
-                    continue
+    def goto_start(self) -> bool:
+        self.ask("MCP_WM.GoTo Start")
+        return True
 
-                direction = 1.0 if diff > 0 else -1.0
-                step = self.sim_speed * dt
+    def goto_status(self) -> str:
+        return self.ask("MCP_WM.GoTo status")
 
-                if step >= abs(diff):
-                    self.position[a] = self.target_position[a]
-                else:
-                    self.position[a] += direction * step
 
-# Mock epics
 class MockEpicsClient:
-    """
-    Mocks the epics.caget behavior.
-    Coupled with the MockPIGCSDevice to return consistent physical values.
-    """
-    def __init__(self, pi_device, initialization_params: dict = {}):
-        self.pi_device = pi_device
-        # Linear relationship: WN = A * Pos + B
-        # From script: target=12625.2, Pos approx ?
-        # Let's assume a simplified relationship for simulation:
-        # 1 mm = 100 cm^-1
-        self.slope = initialization_params.get("slope", 100.0)
-        self.offset = initialization_params.get("offset", 16600.0)
-        self.noise = initialization_params.get("noise_level", 0.0005)
+    """Mocks epics.caget for the wavemeter PVs by reading the MockMatisseDevice.
 
-    def caget(self, pvname):
-        # We only care about Wavenumber PVs
+    Constructor signature matches the real ComClient so daq_system.py can
+    swap them transparently.
+    """
+
+    def __init__(self, matisse_device, initialization_params: dict = {}):
+        self.matisse = matisse_device
+        self.noise = float(initialization_params.get("noise_level", 1e-6))
+
+    def caget(self, pvname: str):
         if "wavenumber" in pvname:
-            # Get current motor position
-            # We assume Axis 1 controls this
-            pos_dict = self.pi_device.qPOS(1)
-            pos = pos_dict[1]
-
-            # Calculate WN
-            wn = self.offset + (pos * self.slope)
-
-            # Add some measurement noise
-            import random
-            noise_val = random.uniform(-self.noise, self.noise)
-            return wn + noise_val
+            base = getattr(self.matisse, "sim_wn", 12625.0)
+            # Tick the sim forward whenever the wavemeter is read, so even
+            # idle controller iterations advance the slew dynamics.
+            if hasattr(self.matisse, "_lock") and hasattr(self.matisse, "_advance"):
+                with self.matisse._lock:
+                    self.matisse._advance()
+                    base = self.matisse.sim_wn
+            return base + random.uniform(-self.noise, self.noise)
         return 0.0

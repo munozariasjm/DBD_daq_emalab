@@ -29,6 +29,28 @@ The system defaults to **Simulation Mode** (no hardware needed). To switch:
 2. Set `"simulation_mode": false`.
 3. Fill in the driver logic in `src/devices/` for your specific hardware.
 
+### Matisse setup (one-time, real hardware only)
+
+Laser stabilisation is delegated to the Matisse's own firmware CounterDrift
+loop, driven over MCP commands by `LASERLABCOMPUTER/laser_server.py`. Before
+running the DAQ against real hardware:
+
+1. Launch Matisse Commander on the laser-lab computer.
+2. **Display Options → Position Display Mode = nm.**
+3. Open the **CounterDrift** dialog (Wavemeter → CounterDrift) and set its
+   **Unit = nm**.
+4. Start `python LASERLABCOMPUTER/laser_server.py` on that machine.
+
+The DAQ opens (and re-uses) both the CounterDrift and GoTo dialogs on connect
+and sends wavelengths in **nm vacuum**. If either unit is left at cm⁻¹ the
+laser will be commanded to wildly wrong frequencies.
+
+Tuning knobs (all in `settings.json → control_settings.laser`):
+`tolerance`, `goto_threshold`, three settle windows
+(`dialog_open_delay`, `activation_delay`, `setpoint_settle`), and
+`required_stable_samples`. Same values are editable live from the GUI's
+*Laser Control* dialog.
+
 ## Project Structure
 
 - `main.py`: Main entry point for the GUI.

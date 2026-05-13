@@ -25,40 +25,28 @@
             "mean_events_per_bunch": 10.0
         },
         "laser": {
-            "move_speed": 500.0,
-            "noise_level": 0.001
+            "slew_rate": 50.0,
+            "noise_level": 1e-6
+        },
+        "epics": {
+            "noise_level": 1e-6
         },
         "multimeter": {
             "noise_level": 0.05
-        },
-        "epics": {
-            "offset": 16666.0,
-            "slope": 5.0,
-            "noise_level": 0.001
         }
     },
     "control_settings": {
         "laser": {
-            "pid_enabled": false,
-            "controller_mode": "pid",
-            "tolerance": 0.0003,
+            "tolerance": 1e-5,
             "poll_interval": 0.5,
             "required_stable_samples": 4,
             "wavechannel": 1,
-            "voltage_min": 0.0,
-            "voltage_max": 0.7,
-            "step_fine": 0.001,
-            "step_coarse": 0.005,
-            "counterdrift_mode": false,
-            "auto_reset_enabled": false,
-            "auto_reset_target": 0.35,
             "wm_averaging_samples": 5,
-            "pid": {
-                "kp": -0.0001,
-                "ki": 0.0,
-                "kd": 0.0,
-                "d_filter_coeff": 0.01
-            }
+            "goto_threshold": 0.01,
+            "dialog_open_delay": 0.3,
+            "activation_delay": 1.0,
+            "setpoint_settle": 0.5,
+            "continuous": false
         }
     },
     "simulation_mode": false

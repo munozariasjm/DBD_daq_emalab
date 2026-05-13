@@ -1,114 +1,166 @@
+"""XML-RPC bridge to the Sirah Matisse, exposing the MCP CounterDrift / GoTo
+commands documented in update_docs.pdf (pp. 14-20).
+
+The DAQ runs on a different machine and reaches this server over XML-RPC. All
+hardware access is serialised by a single lock so concurrent XML-RPC threads
+can't interleave Matisse commands.
+
+Operator-side requirement: in Matisse Commander, set Display Options >
+Position Display Mode = nm AND the CounterDrift dialog Unit = nm. The DAQ
+sends nm-vacuum values; if the Matisse is set to cm^-1 the laser will be
+commanded to wildly wrong frequencies.
+"""
+
 import os
 import sys
+import socket
 import threading
 import time
 from xmlrpc.server import SimpleXMLRPCServer
 from socketserver import ThreadingMixIn
-from pylablib.devices import Sirah
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
-SIMULATION = os.environ.get('SIMULATION', '0') == '1'
+SIMULATION = os.environ.get("SIMULATION", "0") == "1"
 
 if SIMULATION:
     print("[Server] SIMULATION MODE ENABLED")
-    from simulation import get_mock_device, mock_caget
-    GCSDevice = None
-    epics = None
+    from src.simulation.hardware_mocks import MockMatisseDevice
 else:
     try:
-        from pipython import GCSDevice,pitools
-        import epics
+        from pylablib.devices import Sirah
     except ImportError as e:
         print(f"[Server] Hardware libraries missing: {e}. Use SIMULATION=1 for testing.")
         sys.exit(1)
 
-CONTROLLERNAME = 'HydraPollux'
-COM_PORT = 5
-BAUD_RATE = 19200
-SERVER_IP = '0.0.0.0'
+SIRAH_USB_RESOURCE = "USB0::0x17E7::0x0102::24-50-09::INSTR"
+SERVER_IP = "0.0.0.0"
 SERVER_PORT = 8000
 
+
 class ThreadedXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
-    """Allows the server to handle multiple requests (like non-blocking queries) simultaneously."""
+    """Handles concurrent XML-RPC clients (the GUI and Scanner can both poll)."""
     pass
 
+
 class LaserServerInterface:
+    """Public XML-RPC methods are the eight MCP wrappers below plus close()."""
+
     def __init__(self):
         self.lock = threading.Lock()
-        self.laser = False
         try:
-            print(f"[Server] Initializing {CONTROLLERNAME}...")
+            print("[Server] Initialising Matisse...")
             if SIMULATION:
-                self.pi = get_mock_device()
-                self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
-                self.pi.SVO(1, 1)
-                return
-            elif self.laser:
-                self.pi = GCSDevice(CONTROLLERNAME)
-                self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
-                print(f"[Server] Connected: {self.pi.qIDN().strip()}")
-
-                self.pi.SVO(1, 1)
-                print("[Server] Servo enabled (Axis 1).")
-                print(self.pi.qPOS(1)[1])
+                self.sirah = MockMatisseDevice()
             else:
-                self.sirah = Sirah.SirahMatisse("USB0::0x17E7::0x0102::24-50-09::INSTR")
+                self.sirah = Sirah.SirahMatisse(SIRAH_USB_RESOURCE)
+            print("[Server] Matisse ready.")
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
-            self.pi = None
+            self.sirah = None
 
-    def MOV(self, axis, target):
-        print(f"[CMD] MOV Axis {axis} -> {target}")
+    def _ask(self, cmd: str) -> str:
+        """Send a single MCP command and return the raw reply string."""
+        if self.sirah is None:
+            raise RuntimeError("Matisse not initialised")
+        with self.lock:
+            reply = self.sirah.ask(cmd)
+        return reply if reply is not None else ""
+
+    # ---- CounterDrift ----
+
+    def cd_open(self) -> bool:
         try:
-            with self.lock:
-                if self.laser:
-                    self.pi.MOV(axis, float(target))
-                    time.sleep(0.5) # Critical: Small pause
-                else:
-                    print()
-                    self.sirah.ask(f'SCAN:NOW {float(target)}')
+            self._ask("MCP_WM_CounterDrift")
             return True
         except Exception as e:
-            print(f"Hardware Error in MOV: {e}")
+            print(f"[Server] cd_open error: {e}")
             return False
 
-    def qPOS(self, axis):
+    def cd_setpoint(self, nm: float) -> bool:
         try:
-            with self.lock:
-                if self.laser:
-                    val = self.pi.qPOS(axis)[axis]
-                    time.sleep(0.5) # Critical: Small pause after serial talk
-                else:
-                    val = self.sirah.ask(f'SCAN:NOW?')
-            return float(val)   
+            self._ask(f"MCP_WM.Counterdrift Setpoint {float(nm)}")
+            return True
         except Exception as e:
-            print(f"Hardware Error in qPOS: {e}")
+            print(f"[Server] cd_setpoint({nm}) error: {e}")
+            return False
+
+    def cd_activate(self, state: bool) -> bool:
+        try:
+            self._ask(f"MCP_WM.Counterdrift Activate {'true' if state else 'false'}")
+            return True
+        except Exception as e:
+            print(f"[Server] cd_activate({state}) error: {e}")
+            return False
+
+    def cd_get_wavelength(self) -> float:
+        try:
+            reply = self._ask("MCP_WM_GET_WAVELENGTH")
+            return float(reply.split()[0])
+        except Exception as e:
+            print(f"[Server] cd_get_wavelength error: {e}")
             return 0.0
 
-    def close(self):
-        if self.laser:
-            self.pi.CloseConnection()
-        else:
-            self.sirah.close()
+    # ---- GoTo ----
+
+    def goto_open(self) -> bool:
+        try:
+            self._ask("MCP_WM_GotoPosition")
+            return True
+        except Exception as e:
+            print(f"[Server] goto_open error: {e}")
+            return False
+
+    def goto_set(self, nm: float) -> bool:
+        try:
+            self._ask(f"MCP_WM.GoTo Goto {float(nm)}")
+            return True
+        except Exception as e:
+            print(f"[Server] goto_set({nm}) error: {e}")
+            return False
+
+    def goto_start(self) -> bool:
+        try:
+            self._ask("MCP_WM.GoTo Start")
+            return True
+        except Exception as e:
+            print(f"[Server] goto_start error: {e}")
+            return False
+
+    def goto_status(self) -> str:
+        try:
+            return self._ask("MCP_WM.GoTo status").strip().upper() or "STOP"
+        except Exception as e:
+            print(f"[Server] goto_status error: {e}")
+            return "STOP"
+
+    # ---- Lifecycle ----
+
+    def close(self) -> bool:
+        try:
+            if self.sirah is not None:
+                with self.lock:
+                    self.sirah.close()
+            return True
+        except Exception as e:
+            print(f"[Server] close error: {e}")
+            return False
+
 
 if __name__ == "__main__":
-    import time
-    import socket
     socket.setdefaulttimeout(120)
-
     server = ThreadedXMLRPCServer((SERVER_IP, SERVER_PORT), allow_none=True)
     server.register_instance(LaserServerInterface())
 
-    print(f"==========================================")
+    print("==========================================")
     print(f" LASER SERVER RUNNING ON PORT {SERVER_PORT}")
-    print(f"==========================================")
+    print("==========================================")
     try:
         print("Server active. Press Ctrl+C to stop.")
         server.serve_forever()
     except Exception as e:
         with open("server_crash_log.txt", "a") as f:
-            f.write(f"Crash at {time.ctime()}: {str(e)}\n")
+            f.write(f"Crash at {time.ctime()}: {e}\n")
         print(f"CRITICAL SERVER ERROR: {e}")
     finally:
         print("Shutting down...")

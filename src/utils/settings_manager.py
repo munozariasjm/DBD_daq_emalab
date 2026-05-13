@@ -28,8 +28,11 @@ class SettingsManager:
                 "mean_events_per_bunch": 200.0
             },
             "laser": {
-                "move_speed": 10.0,
-                "noise_level": 0.001
+                "slew_rate": 50.0,
+                "noise_level": 1e-6
+            },
+            "epics": {
+                "noise_level": 1e-6
             },
             "multimeter": {
                 "noise_level": 0.05
@@ -37,21 +40,16 @@ class SettingsManager:
         },
         "control_settings": {
             "laser": {
-                "controller_mode": "pid",
-                "tolerance": 0.007,
-                "poll_interval": 0.01,
+                "tolerance": 1e-5,
+                "poll_interval": 0.5,
                 "required_stable_samples": 4,
                 "wavechannel": 1,
-                "voltage_min": 0.0,
-                "voltage_max": 5.0,
-                "step_fine": 0.001,
-                "step_coarse": 0.005,
-                "pid": {
-                    "kp": 0.02,
-                    "ki": 0.005,
-                    "kd": 0.0,
-                    "d_filter_coeff": 0.1
-                }
+                "wm_averaging_samples": 5,
+                "goto_threshold": 0.01,
+                "dialog_open_delay": 0.3,
+                "activation_delay": 1.0,
+                "setpoint_settle": 0.5,
+                "continuous": False
             }
         }
     }

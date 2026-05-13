@@ -10,14 +10,14 @@ import json
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
 
-from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
+from src.simulation.hardware_mocks import MockMatisseDevice, MockEpicsClient
 from src.control.laser_controller import LaserController
 from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
 
 # Real Hardware Imports
 from src.devices.tagger import Tagger
-from src.devices.laser import PIGCSDevice, ComClient
+from src.devices.laser import MatisseDevice, ComClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
 class DAQSystem:
@@ -38,33 +38,29 @@ class DAQSystem:
         if simulation_mode: # Simulation Mode
             self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
 
-            self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
+            merged_sim_params = dict(laser_sim_settings)
+            merged_sim_params.update(epics_sim_settings)
+            self.matisse_device = MockMatisseDevice(initialization_params=merged_sim_params)
 
-            self.epics_client = MockEpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+            self.epics_client = MockEpicsClient(self.matisse_device, initialization_params=epics_sim_settings)
 
             self.multimeter = MockMultimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
             self.spec_reader = MockSpectrometreReader()
             self.wave_reader = MockWavenumberReader(source=None)
 
         else: # Real Hardware
-            print("Using real ")
+            print("Using real hardware")
             self.tagger = Tagger(index=0)
 
-            self.pi_device = PIGCSDevice("PI")
-            self.epics_client = ComClient(self.pi_device, initialization_params=epics_sim_settings)
+            self.matisse_device = MatisseDevice("Matisse")
+            self.epics_client = ComClient(self.matisse_device, initialization_params=epics_sim_settings)
 
             self.hp_multimeter = HP_Multimeter(port="COM16")
             self.multimeter = VoltageReader(self.hp_multimeter)
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
 
-        if hasattr(self.pi_device, 'SVO'):
-             try:
-                 self.pi_device.SVO(1, True)
-             except Exception as e:
-                 print(f"[DAQ] Warning: Failed to enable Servo: {e}")
-
-        self.laser = LaserController(self.pi_device, self.epics_client, config=laser_control_settings)
+        self.laser = LaserController(self.matisse_device, self.epics_client, config=laser_control_settings)
 
         if simulation_mode:
             self.wave_reader.source = self.laser

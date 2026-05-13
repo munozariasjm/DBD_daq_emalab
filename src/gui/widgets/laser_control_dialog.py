@@ -1,213 +1,168 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox,
-                             QDialogButtonBox, QLabel, QComboBox, QGroupBox,
-                             QCheckBox)
+"""Laser control settings dialog for CounterDrift-based stabilization.
+
+The Matisse runs its own firmware CounterDrift loop; this dialog only exposes
+the wavemeter-side parameters (tolerance, polling, averaging) and the
+sequencing knobs (GoTo threshold, three settle windows).
+"""
+
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QSpinBox
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QSpinBox,
+    QVBoxLayout,
+)
+
+
+SETUP_BANNER = (
+    "Matisse Commander setup (one-time):\n"
+    "  • Display Options → Position Display Mode = nm\n"
+    "  • CounterDrift dialog Unit = nm\n"
+    "The DAQ sends nm-vacuum values; cm⁻¹ mode will command wildly wrong\n"
+    "frequencies."
+)
+
 
 class LaserControlDialog(QDialog):
     def __init__(self, current_settings: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Laser Control Settings")
-        self.resize(350, 400)
-        self.settings = current_settings.copy()
+        self.setWindowTitle("Laser Control (CounterDrift)")
+        self.resize(420, 480)
+        self.settings = dict(current_settings)
 
-        self.layout = QVBoxLayout(self)
-        self.form_layout = QFormLayout()
+        layout = QVBoxLayout(self)
 
-        # PID Enabled toggle (top-level, most important)
-        self.pid_enabled_check = QCheckBox()
-        self.pid_enabled_check.setChecked(self.settings.get("pid_enabled", True))
-        self.pid_enabled_check.setToolTip(
-            "When unchecked, the DAQ will not send laser commands.\n"
-            "Use this when controlling the laser from an external GUI.")
-        self.pid_enabled_check.toggled.connect(self._on_pid_enabled_toggled)
-        self.form_layout.addRow("PID Enabled:", self.pid_enabled_check)
+        banner = QLabel(SETUP_BANNER)
+        banner.setWordWrap(True)
+        banner.setStyleSheet(
+            "QLabel { background-color: #fff7d6; color: #5a4a00;"
+            " padding: 8px; border: 1px solid #d0c060; }"
+        )
+        layout.addWidget(banner)
 
-        # Controller mode selector
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["PID", "Bang-Bang"])
-        current_mode = self.settings.get("controller_mode", "pid")
-        self.mode_combo.setCurrentIndex(0 if current_mode == "pid" else 1)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        self.form_layout.addRow("Controller Mode:", self.mode_combo)
+        # --- Lock parameters ---
+        lock_group = QGroupBox("Lock parameters")
+        lock_form = QFormLayout()
 
-        # Tolerance
         self.tolerance_spin = QDoubleSpinBox()
-        self.tolerance_spin.setRange(0.0001, 1.0)
-        self.tolerance_spin.setDecimals(4)
-        self.tolerance_spin.setValue(self.settings.get("tolerance", 0.01))
-        self.form_layout.addRow("Tolerance (cm\u207b\u00b9):", self.tolerance_spin)
+        self.tolerance_spin.setDecimals(7)
+        self.tolerance_spin.setRange(1e-7, 1.0)
+        self.tolerance_spin.setSingleStep(1e-6)
+        self.tolerance_spin.setValue(float(self.settings.get("tolerance", 1e-5)))
+        self.tolerance_spin.setToolTip(
+            "Maximum |wavemeter − target| in cm⁻¹ for a sample to count toward lock.\n"
+            "Hardware resolves below 1e-5; tighten as far as your wavemeter noise allows."
+        )
+        lock_form.addRow("Tolerance (cm⁻¹):", self.tolerance_spin)
 
-        # Poll Interval
+        self.goto_threshold_spin = QDoubleSpinBox()
+        self.goto_threshold_spin.setDecimals(7)
+        self.goto_threshold_spin.setRange(1e-7, 1.0)
+        self.goto_threshold_spin.setSingleStep(1e-5)
+        self.goto_threshold_spin.setValue(float(self.settings.get("goto_threshold", 0.01)))
+        self.goto_threshold_spin.setToolTip(
+            "If |current − target| exceeds this, the controller runs MCP_WM.GoTo\n"
+            "for coarse positioning before activating CounterDrift."
+        )
+        lock_form.addRow("GoTo threshold (cm⁻¹):", self.goto_threshold_spin)
+
         self.poll_spin = QDoubleSpinBox()
-        self.poll_spin.setRange(0.001, 5.0)
         self.poll_spin.setDecimals(3)
+        self.poll_spin.setRange(0.001, 5.0)
         self.poll_spin.setSingleStep(0.01)
-        self.poll_spin.setValue(self.settings.get("poll_interval", 0.5))
-        self.form_layout.addRow("Poll Interval (s):", self.poll_spin)
+        self.poll_spin.setValue(float(self.settings.get("poll_interval", 0.5)))
+        lock_form.addRow("Poll interval (s):", self.poll_spin)
 
-        # Stable Samples
         self.stable_samples_spin = QSpinBox()
-        self.stable_samples_spin.setRange(1, 20)
+        self.stable_samples_spin.setRange(1, 50)
         self.stable_samples_spin.setValue(int(self.settings.get("required_stable_samples", 4)))
-        self.form_layout.addRow("Stable Samples:", self.stable_samples_spin)
+        lock_form.addRow("Stable samples:", self.stable_samples_spin)
 
-        # Wavemeter Channel
         self.channel_spin = QSpinBox()
         self.channel_spin.setRange(1, 4)
         self.channel_spin.setValue(int(self.settings.get("wavechannel", 1)))
-        self.form_layout.addRow("Wavemeter Channel:", self.channel_spin)
-
-        self.layout.addLayout(self.form_layout)
-
-        # --- Voltage Limits ---
-        self.voltage_group = QGroupBox("Voltage Limits")
-        voltage_layout = QFormLayout()
-
-        self.voltage_min_spin = QDoubleSpinBox()
-        self.voltage_min_spin.setRange(0.0, 10.0)
-        self.voltage_min_spin.setDecimals(2)
-        self.voltage_min_spin.setSingleStep(0.1)
-        self.voltage_min_spin.setValue(self.settings.get("voltage_min", 0.0))
-        voltage_layout.addRow("Min Voltage (V):", self.voltage_min_spin)
-
-        self.voltage_max_spin = QDoubleSpinBox()
-        self.voltage_max_spin.setRange(0.0, 10.0)
-        self.voltage_max_spin.setDecimals(2)
-        self.voltage_max_spin.setSingleStep(0.1)
-        self.voltage_max_spin.setValue(self.settings.get("voltage_max", 5.0))
-        voltage_layout.addRow("Max Voltage (V):", self.voltage_max_spin)
-
-        self.voltage_group.setLayout(voltage_layout)
-        self.layout.addWidget(self.voltage_group)
-
-        # --- PID Gains ---
-        self.pid_group = QGroupBox("PID Gains")
-        pid_layout = QFormLayout()
-        pid_config = self.settings.get("pid", {})
-
-        self.kp_spin = QDoubleSpinBox()
-        self.kp_spin.setRange(-10.0, 10.0)
-        self.kp_spin.setDecimals(4)
-        self.kp_spin.setSingleStep(0.001)
-        self.kp_spin.setValue(pid_config.get("kp", -0.1))
-        pid_layout.addRow("Kp:", self.kp_spin)
-
-        self.ki_spin = QDoubleSpinBox()
-        self.ki_spin.setRange(-10.0, 10.0)
-        self.ki_spin.setDecimals(4)
-        self.ki_spin.setSingleStep(0.001)
-        self.ki_spin.setValue(pid_config.get("ki", -0.05))
-        pid_layout.addRow("Ki:", self.ki_spin)
-
-        self.kd_spin = QDoubleSpinBox()
-        self.kd_spin.setRange(-10.0, 10.0)
-        self.kd_spin.setDecimals(4)
-        self.kd_spin.setSingleStep(0.001)
-        self.kd_spin.setValue(pid_config.get("kd", -0.01))
-        pid_layout.addRow("Kd:", self.kd_spin)
-
-        self.d_filter_spin = QDoubleSpinBox()
-        self.d_filter_spin.setRange(0.01, 1.0)
-        self.d_filter_spin.setDecimals(3)
-        self.d_filter_spin.setSingleStep(0.01)
-        self.d_filter_spin.setValue(pid_config.get("d_filter_coeff", 0.1))
-        pid_layout.addRow("D Filter Coeff:", self.d_filter_spin)
-
-        self.pid_group.setLayout(pid_layout)
-        self.layout.addWidget(self.pid_group)
-
-        # --- Bang-Bang Steps ---
-        self.bangbang_group = QGroupBox("Bang-Bang Steps")
-        bb_layout = QFormLayout()
-
-        self.fine_step_spin = QDoubleSpinBox()
-        self.fine_step_spin.setRange(0.00001, 1.0)
-        self.fine_step_spin.setDecimals(5)
-        self.fine_step_spin.setValue(self.settings.get("step_fine", 0.0001))
-        bb_layout.addRow("Fine Step (V):", self.fine_step_spin)
-
-        self.coarse_step_spin = QDoubleSpinBox()
-        self.coarse_step_spin.setRange(0.001, 10.0)
-        self.coarse_step_spin.setDecimals(3)
-        self.coarse_step_spin.setValue(self.settings.get("step_coarse", 0.05))
-        bb_layout.addRow("Coarse Step (V):", self.coarse_step_spin)
-
-        self.bangbang_group.setLayout(bb_layout)
-        self.layout.addWidget(self.bangbang_group)
-
-        # --- Counterdrift & Auto-Reset ---
-        self.counterdrift_group = QGroupBox("Counterdrift / Auto-Reset")
-        cd_layout = QFormLayout()
-
-        self.counterdrift_check = QCheckBox()
-        self.counterdrift_check.setChecked(self.settings.get("counterdrift_mode", False))
-        cd_layout.addRow("Counterdrift Mode:", self.counterdrift_check)
-
-        self.auto_reset_check = QCheckBox()
-        self.auto_reset_check.setChecked(self.settings.get("auto_reset_enabled", True))
-        cd_layout.addRow("Auto-Reset Piezo:", self.auto_reset_check)
-
-        self.auto_reset_target_spin = QDoubleSpinBox()
-        self.auto_reset_target_spin.setRange(0.0, 1.0)
-        self.auto_reset_target_spin.setDecimals(3)
-        self.auto_reset_target_spin.setSingleStep(0.01)
-        self.auto_reset_target_spin.setValue(self.settings.get("auto_reset_target", 0.35))
-        cd_layout.addRow("Auto-Reset Target (V):", self.auto_reset_target_spin)
+        lock_form.addRow("Wavemeter channel:", self.channel_spin)
 
         self.wm_avg_spin = QSpinBox()
-        self.wm_avg_spin.setRange(1, 50)
+        self.wm_avg_spin.setRange(1, 200)
         self.wm_avg_spin.setValue(int(self.settings.get("wm_averaging_samples", 5)))
-        cd_layout.addRow("WM Averaging Samples:", self.wm_avg_spin)
+        lock_form.addRow("WM averaging samples:", self.wm_avg_spin)
 
-        self.counterdrift_group.setLayout(cd_layout)
-        self.layout.addWidget(self.counterdrift_group)
+        lock_group.setLayout(lock_form)
+        layout.addWidget(lock_group)
+
+        # --- Timing / settling ---
+        settle_group = QGroupBox("Timing / settling (s)")
+        settle_form = QFormLayout()
+
+        self.dialog_open_spin = QDoubleSpinBox()
+        self.dialog_open_spin.setDecimals(3)
+        self.dialog_open_spin.setRange(0.0, 10.0)
+        self.dialog_open_spin.setSingleStep(0.05)
+        self.dialog_open_spin.setValue(float(self.settings.get("dialog_open_delay", 0.3)))
+        self.dialog_open_spin.setToolTip(
+            "Pause after MCP_WM_CounterDrift / MCP_WM_GotoPosition so the\n"
+            "Matisse UI has time to actually open the dialog."
+        )
+        settle_form.addRow("Dialog-open delay:", self.dialog_open_spin)
+
+        self.activation_spin = QDoubleSpinBox()
+        self.activation_spin.setDecimals(3)
+        self.activation_spin.setRange(0.0, 30.0)
+        self.activation_spin.setSingleStep(0.05)
+        self.activation_spin.setValue(float(self.settings.get("activation_delay", 1.0)))
+        self.activation_spin.setToolTip(
+            "Buffer after a fresh CounterDrift Activate(true) before we start\n"
+            "judging stability against the wavemeter."
+        )
+        settle_form.addRow("Activation delay:", self.activation_spin)
+
+        self.setpoint_settle_spin = QDoubleSpinBox()
+        self.setpoint_settle_spin.setDecimals(3)
+        self.setpoint_settle_spin.setRange(0.0, 30.0)
+        self.setpoint_settle_spin.setSingleStep(0.05)
+        self.setpoint_settle_spin.setValue(float(self.settings.get("setpoint_settle", 0.5)))
+        self.setpoint_settle_spin.setToolTip(
+            "Buffer after a Setpoint change while CounterDrift is already\n"
+            "active (small slew within capture range)."
+        )
+        settle_form.addRow("Setpoint settle:", self.setpoint_settle_spin)
+
+        settle_group.setLayout(settle_form)
+        layout.addWidget(settle_group)
+
+        # --- Mode ---
+        self.continuous_check = QCheckBox()
+        self.continuous_check.setChecked(bool(self.settings.get("continuous", False)))
+        self.continuous_check.setToolTip(
+            "Keep the control loop alive after the first lock so the laser\n"
+            "stays held against long-term drift (CounterDrift continuous mode)."
+        )
+        cont_form = QFormLayout()
+        cont_form.addRow("Continuous hold:", self.continuous_check)
+        layout.addLayout(cont_form)
 
         # Buttons
-        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.layout.addWidget(self.buttons)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
-        # Set initial visibility
-        self._on_mode_changed(self.mode_combo.currentIndex())
-        self._on_pid_enabled_toggled(self.pid_enabled_check.isChecked())
-
-    def _on_pid_enabled_toggled(self, enabled):
-        """Grey out all PID-related controls when PID is disabled."""
-        self.mode_combo.setEnabled(enabled)
-        self.pid_group.setEnabled(enabled)
-        self.bangbang_group.setEnabled(enabled)
-        self.counterdrift_group.setEnabled(enabled)
-        if enabled:
-            self._on_mode_changed(self.mode_combo.currentIndex())
-
-    def _on_mode_changed(self, index):
-        is_pid = index == 0
-        self.pid_group.setVisible(is_pid)
-        self.bangbang_group.setVisible(not is_pid)
-
-    def get_settings(self):
-        mode = "pid" if self.mode_combo.currentIndex() == 0 else "bangbang"
+    def get_settings(self) -> dict:
         return {
-            "pid_enabled": self.pid_enabled_check.isChecked(),
-            "controller_mode": mode,
             "tolerance": self.tolerance_spin.value(),
+            "goto_threshold": self.goto_threshold_spin.value(),
             "poll_interval": self.poll_spin.value(),
             "required_stable_samples": self.stable_samples_spin.value(),
             "wavechannel": self.channel_spin.value(),
-            "voltage_min": self.voltage_min_spin.value(),
-            "voltage_max": self.voltage_max_spin.value(),
-            "step_fine": self.fine_step_spin.value(),
-            "step_coarse": self.coarse_step_spin.value(),
-            "counterdrift_mode": self.counterdrift_check.isChecked(),
-            "auto_reset_enabled": self.auto_reset_check.isChecked(),
-            "auto_reset_target": self.auto_reset_target_spin.value(),
             "wm_averaging_samples": self.wm_avg_spin.value(),
-            "pid": {
-                "kp": self.kp_spin.value(),
-                "ki": self.ki_spin.value(),
-                "kd": self.kd_spin.value(),
-                "d_filter_coeff": self.d_filter_spin.value(),
-            }
+            "dialog_open_delay": self.dialog_open_spin.value(),
+            "activation_delay": self.activation_spin.value(),
+            "setpoint_settle": self.setpoint_settle_spin.value(),
+            "continuous": self.continuous_check.isChecked(),
         }

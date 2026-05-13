@@ -67,6 +67,14 @@ class LaserServerInterface:
             reply = self.sirah.ask(cmd)
         return reply if reply is not None else ""
 
+    # ---- Reachability ----
+
+    def ping(self) -> bool:
+        """Cheap probe used by the DAQ on connect. Returns True if the server
+        is up AND the Matisse handle was initialised; False if the server is
+        up but the laser is dead. Does not touch the Matisse hardware."""
+        return self.sirah is not None
+
     # ---- CounterDrift ----
 
     def cd_open(self) -> bool:

@@ -47,6 +47,10 @@ class LaserController:
         self.is_locked = False
         self._cd_active = False
         self._dialog_opened = False
+        # Pre-flight unit check (Matisse Display Unit vs wavemeter). Verified
+        # once per controller lifetime — operator is assumed not to flip the
+        # Matisse Commander unit setting mid-session.
+        self._setup_verified = False
 
         # Threading
         self.lock = threading.Lock()
@@ -158,12 +162,86 @@ class LaserController:
             return self.stop_event.is_set()
         return self.stop_event.wait(seconds)
 
+    def _verify_setup(self) -> bool:
+        """One-time pre-flight: do the Matisse and the EPICS wavemeter agree
+        on the current laser wavelength?
+
+        `MCP_WM_GET_WAVELENGTH` always returns nm vacuum (docs p. 14); the
+        EPICS PV returns cm⁻¹. If the values disagree, this almost always
+        means one of:
+
+          1. Matisse Commander Display Unit / CounterDrift Unit is cm⁻¹
+             instead of nm — every setpoint we send will be interpreted in
+             the wrong unit and the laser will be driven catastrophically
+             far from target. Detected when the Matisse reading numerically
+             matches the wavemeter's cm⁻¹ value (the Matisse is reporting
+             its own readout in the wrong unit).
+          2. Wrong wavemeter channel / PV — the EPICS reading isn't this
+             laser at all. Detected when the two readings don't match in
+             either interpretation.
+          3. Matisse or wavemeter offline — read returned 0 or non-finite.
+
+        Returns True if everything looks sane and the controller may engage.
+        On failure, prints a loud banner explaining what to fix and returns
+        False. The control loop then refuses to activate CounterDrift."""
+        try:
+            matisse_reading = float(self.matisse.cd_get_wavelength())
+        except Exception as e:
+            print(f"[Laser] Pre-flight unit check: cd_get_wavelength raised: {e}")
+            return False
+        wn = self.get_wavenumber()
+        if matisse_reading <= 0 or wn <= 0:
+            print(
+                f"[Laser] Pre-flight unit check: zero/negative reading "
+                f"(Matisse={matisse_reading}, EPICS={wn}). Refusing to engage."
+            )
+            return False
+
+        expected_nm = 1e7 / wn  # what cd_get_wavelength should be, in nm
+
+        if abs(matisse_reading - expected_nm) < 0.5:
+            print(
+                f"[Laser] Pre-flight unit check OK: Matisse={matisse_reading:.4f} nm, "
+                f"EPICS={wn:.6f} cm^-1 (={expected_nm:.4f} nm)"
+            )
+            return True
+
+        # Catastrophic case: Matisse's "wavelength in nm" reading is actually
+        # numerically the wavenumber. Display Unit is set to cm⁻¹.
+        if abs(matisse_reading - wn) < 1.0:
+            print("[Laser] ============= MATISSE UNIT MISMATCH =============")
+            print(f"[Laser] cd_get_wavelength returned: {matisse_reading}")
+            print(f"[Laser] EPICS wavemeter returned : {wn:.6f} cm^-1")
+            print(f"[Laser] Expected (in nm)         : {expected_nm:.4f}")
+            print("[Laser] The Matisse reading matches the wavemeter in cm^-1,")
+            print("[Laser] not in nm. Display Unit / CounterDrift Unit are NOT nm.")
+            print("[Laser] In Matisse Commander, set BOTH of these to nm:")
+            print("[Laser]   - Display Options -> Position Display Mode")
+            print("[Laser]   - CounterDrift dialog -> Unit")
+            print("[Laser] Refusing to engage CounterDrift.")
+            print("[Laser] =================================================")
+            return False
+
+        # Neither interpretation matches — wavemeter channel/PV is wrong or
+        # the EPICS reading isn't this laser.
+        print("[Laser] ========== MATISSE/WAVEMETER DISAGREE ===========")
+        print(f"[Laser] cd_get_wavelength : {matisse_reading} (interpreted as nm)")
+        print(f"[Laser] EPICS wavemeter   : {wn:.6f} cm^-1 (={expected_nm:.4f} nm)")
+        print(f"[Laser] |Matisse - EPICS_nm| = {abs(matisse_reading - expected_nm):.4f} nm")
+        print(f"[Laser] These are not consistent with the same laser.")
+        print(f"[Laser] Check wavemeter channel (current: {self.wavechannel}) and the")
+        print(f"[Laser] EPICS PV path. Refusing to engage CounterDrift.")
+        print("[Laser] =================================================")
+        return False
+
     def _ensure_dialogs(self):
         if self._dialog_opened:
             return
         try:
-            self.matisse.cd_open()
-            self.matisse.goto_open()
+            if not self.matisse.cd_open():
+                print("[Laser] WARNING: server rejected cd_open — CounterDrift dialog may not be available")
+            if not self.matisse.goto_open():
+                print("[Laser] WARNING: server rejected goto_open — GoTo dialog may not be available")
         except Exception as e:
             print(f"[Laser] dialog open failed: {e}")
             return
@@ -180,8 +258,11 @@ class LaserController:
                 print(f"[Laser] cd_activate(False) before GoTo failed: {e}")
             self._cd_active = False
         try:
-            self.matisse.goto_set(target_nm)
-            self.matisse.goto_start()
+            if not self.matisse.goto_set(target_nm):
+                print(f"[Laser] WARNING: server rejected goto_set({target_nm})")
+            if not self.matisse.goto_start():
+                print("[Laser] WARNING: server rejected goto_start — coarse positioning will not run")
+                return False
         except Exception as e:
             print(f"[Laser] goto_set/start failed: {e}")
             return False
@@ -200,9 +281,11 @@ class LaserController:
     def _engage(self, target_nm: float, fresh: bool):
         """Send setpoint, activate if needed, wait the appropriate settle."""
         try:
-            self.matisse.cd_setpoint(target_nm)
+            if not self.matisse.cd_setpoint(target_nm):
+                print(f"[Laser] WARNING: server rejected cd_setpoint({target_nm})")
             if not self._cd_active:
-                self.matisse.cd_activate(True)
+                if not self.matisse.cd_activate(True):
+                    print("[Laser] WARNING: server rejected cd_activate(True) — lock will not engage")
                 self._cd_active = True
                 self._sleep(self.activation_delay)
             else:
@@ -215,6 +298,14 @@ class LaserController:
     def _control_loop(self):
         print(f"[Laser] control loop starting (target={self.target_wn:.6f})")
         self._ensure_dialogs()
+
+        # Pre-flight: confirm Matisse Display Unit / CounterDrift Unit are
+        # set to nm. Skipped on subsequent loop spawns once verified.
+        if not self._setup_verified:
+            if not self._verify_setup():
+                print("[Laser] Pre-flight unit check FAILED — refusing to engage CounterDrift.")
+                return
+            self._setup_verified = True
 
         # Outer aim/re-aim loop: each iteration positions and verifies a lock
         # for the current target. We come back here whenever set_wavenumber()

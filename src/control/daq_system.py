@@ -217,6 +217,10 @@ class DAQSystem:
                                 'voltage': current_voltage,
                                 'spectrum_peak': current_spec,
                                 'wavemeter_wn': current_wns[int(self.wavechannel-1)],
+                                'wavemeter_wn1': current_wns[0],
+                                'wavemeter_wn2': current_wns[1],
+                                'wavemeter_wn3': current_wns[2],
+                                'wavemeter_wn4': current_wns[3],
                                 'laser_target_wn': self.scanner.current_wavenumber,
                                 'scan_bin_index': self.scanner.current_bin_index,
                                 'bunch_id': entry[0] # Global ID from tagger
@@ -240,6 +244,10 @@ class DAQSystem:
                         'voltage': current_voltage,
                         'spectrum_peak': current_spec,
                         'wavemeter_wn': current_wns[int(self.wavechannel-1)], # Native cm^-1
+                        'wavemeter_wn1': current_wns[0],
+                        'wavemeter_wn2': current_wns[1],
+                        'wavemeter_wn3': current_wns[2],
+                        'wavemeter_wn4': current_wns[3],
                         'laser_target_wn': self.scanner.current_wavenumber,
                         'scan_bin_index': self.scanner.current_bin_index,
                         'bunch_id': entry[0] # Global ID from tagger

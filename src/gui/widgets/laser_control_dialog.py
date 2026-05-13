@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox,
-                             QDialogButtonBox, QLabel, QComboBox, QGroupBox)
+                             QDialogButtonBox, QLabel, QComboBox, QGroupBox,
+                             QCheckBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QSpinBox
 
@@ -12,6 +13,15 @@ class LaserControlDialog(QDialog):
 
         self.layout = QVBoxLayout(self)
         self.form_layout = QFormLayout()
+
+        # PID Enabled toggle (top-level, most important)
+        self.pid_enabled_check = QCheckBox()
+        self.pid_enabled_check.setChecked(self.settings.get("pid_enabled", True))
+        self.pid_enabled_check.setToolTip(
+            "When unchecked, the DAQ will not send laser commands.\n"
+            "Use this when controlling the laser from an external GUI.")
+        self.pid_enabled_check.toggled.connect(self._on_pid_enabled_toggled)
+        self.form_layout.addRow("PID Enabled:", self.pid_enabled_check)
 
         # Controller mode selector
         self.mode_combo = QComboBox()
@@ -77,24 +87,24 @@ class LaserControlDialog(QDialog):
         pid_config = self.settings.get("pid", {})
 
         self.kp_spin = QDoubleSpinBox()
-        self.kp_spin.setRange(0.0, 10.0)
+        self.kp_spin.setRange(-10.0, 10.0)
         self.kp_spin.setDecimals(4)
         self.kp_spin.setSingleStep(0.001)
-        self.kp_spin.setValue(pid_config.get("kp", 0.02))
+        self.kp_spin.setValue(pid_config.get("kp", -0.1))
         pid_layout.addRow("Kp:", self.kp_spin)
 
         self.ki_spin = QDoubleSpinBox()
-        self.ki_spin.setRange(0.0, 10.0)
+        self.ki_spin.setRange(-10.0, 10.0)
         self.ki_spin.setDecimals(4)
         self.ki_spin.setSingleStep(0.001)
-        self.ki_spin.setValue(pid_config.get("ki", 0.005))
+        self.ki_spin.setValue(pid_config.get("ki", -0.05))
         pid_layout.addRow("Ki:", self.ki_spin)
 
         self.kd_spin = QDoubleSpinBox()
-        self.kd_spin.setRange(0.0, 10.0)
+        self.kd_spin.setRange(-10.0, 10.0)
         self.kd_spin.setDecimals(4)
         self.kd_spin.setSingleStep(0.001)
-        self.kd_spin.setValue(pid_config.get("kd", 0.0))
+        self.kd_spin.setValue(pid_config.get("kd", -0.01))
         pid_layout.addRow("Kd:", self.kd_spin)
 
         self.d_filter_spin = QDoubleSpinBox()
@@ -126,6 +136,33 @@ class LaserControlDialog(QDialog):
         self.bangbang_group.setLayout(bb_layout)
         self.layout.addWidget(self.bangbang_group)
 
+        # --- Counterdrift & Auto-Reset ---
+        self.counterdrift_group = QGroupBox("Counterdrift / Auto-Reset")
+        cd_layout = QFormLayout()
+
+        self.counterdrift_check = QCheckBox()
+        self.counterdrift_check.setChecked(self.settings.get("counterdrift_mode", False))
+        cd_layout.addRow("Counterdrift Mode:", self.counterdrift_check)
+
+        self.auto_reset_check = QCheckBox()
+        self.auto_reset_check.setChecked(self.settings.get("auto_reset_enabled", True))
+        cd_layout.addRow("Auto-Reset Piezo:", self.auto_reset_check)
+
+        self.auto_reset_target_spin = QDoubleSpinBox()
+        self.auto_reset_target_spin.setRange(0.0, 1.0)
+        self.auto_reset_target_spin.setDecimals(3)
+        self.auto_reset_target_spin.setSingleStep(0.01)
+        self.auto_reset_target_spin.setValue(self.settings.get("auto_reset_target", 0.35))
+        cd_layout.addRow("Auto-Reset Target (V):", self.auto_reset_target_spin)
+
+        self.wm_avg_spin = QSpinBox()
+        self.wm_avg_spin.setRange(1, 50)
+        self.wm_avg_spin.setValue(int(self.settings.get("wm_averaging_samples", 5)))
+        cd_layout.addRow("WM Averaging Samples:", self.wm_avg_spin)
+
+        self.counterdrift_group.setLayout(cd_layout)
+        self.layout.addWidget(self.counterdrift_group)
+
         # Buttons
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.buttons.accepted.connect(self.accept)
@@ -134,6 +171,16 @@ class LaserControlDialog(QDialog):
 
         # Set initial visibility
         self._on_mode_changed(self.mode_combo.currentIndex())
+        self._on_pid_enabled_toggled(self.pid_enabled_check.isChecked())
+
+    def _on_pid_enabled_toggled(self, enabled):
+        """Grey out all PID-related controls when PID is disabled."""
+        self.mode_combo.setEnabled(enabled)
+        self.pid_group.setEnabled(enabled)
+        self.bangbang_group.setEnabled(enabled)
+        self.counterdrift_group.setEnabled(enabled)
+        if enabled:
+            self._on_mode_changed(self.mode_combo.currentIndex())
 
     def _on_mode_changed(self, index):
         is_pid = index == 0
@@ -143,6 +190,7 @@ class LaserControlDialog(QDialog):
     def get_settings(self):
         mode = "pid" if self.mode_combo.currentIndex() == 0 else "bangbang"
         return {
+            "pid_enabled": self.pid_enabled_check.isChecked(),
             "controller_mode": mode,
             "tolerance": self.tolerance_spin.value(),
             "poll_interval": self.poll_spin.value(),
@@ -152,6 +200,10 @@ class LaserControlDialog(QDialog):
             "voltage_max": self.voltage_max_spin.value(),
             "step_fine": self.fine_step_spin.value(),
             "step_coarse": self.coarse_step_spin.value(),
+            "counterdrift_mode": self.counterdrift_check.isChecked(),
+            "auto_reset_enabled": self.auto_reset_check.isChecked(),
+            "auto_reset_target": self.auto_reset_target_spin.value(),
+            "wm_averaging_samples": self.wm_avg_spin.value(),
             "pid": {
                 "kp": self.kp_spin.value(),
                 "ki": self.ki_spin.value(),

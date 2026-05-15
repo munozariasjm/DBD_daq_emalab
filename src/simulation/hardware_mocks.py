@@ -66,7 +66,12 @@ class MockMatisseDevice:
     def ask(self, cmd: str) -> str:
         with self._lock:
             self._advance()
-            parts = cmd.strip().split()
+            stripped = cmd.strip()
+            # Mirror the real server: tolerate the `#SERVER ` routing prefix
+            # that Matisse Commander requires before MCP commands.
+            if stripped.startswith("#SERVER"):
+                stripped = stripped[len("#SERVER"):].lstrip()
+            parts = stripped.split()
             if not parts:
                 return "Ok"
             head = parts[0]

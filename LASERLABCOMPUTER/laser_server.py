@@ -60,11 +60,18 @@ class LaserServerInterface:
             self.sirah = None
 
     def _ask(self, cmd: str) -> str:
-        """Send a single MCP command and return the raw reply string."""
+        """Send a single MCP command and return the raw reply string.
+
+        All MCP commands must be routed through Matisse Commander's server
+        processor, signalled by the `#SERVER ` prefix (see docs pp. 14-20).
+        Without that prefix the command interpreter sees the bare
+        `MCP_WM_*` token, doesn't recognise it as a top-level command, and
+        replies `1,"general syntax error"`."""
         if self.sirah is None:
             raise RuntimeError("Matisse not initialised")
+        full_cmd = cmd if cmd.lstrip().startswith("#SERVER") else f"#SERVER {cmd}"
         with self.lock:
-            reply = self.sirah.ask(cmd)
+            reply = self.sirah.ask(full_cmd)
         return reply if reply is not None else ""
 
     # ---- Reachability ----

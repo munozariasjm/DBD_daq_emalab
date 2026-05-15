@@ -51,7 +51,10 @@ class SettingsManager:
                 "setpoint_settle": 0.5,
                 "continuous": False
             }
-        }
+        },
+        # Safe-by-default. A fresh settings.json gets real hardware; the
+        # operator has to flip this to true explicitly to use simulation.
+        "simulation_mode": False
     }
 
     def __init__(self, config_path: str = "settings.json"):

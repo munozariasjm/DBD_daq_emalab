@@ -32,7 +32,14 @@ class DAQSystem:
         laser_control_settings = control_config.get("laser", {})
         self.wavechannel = int(laser_control_settings.get("wavechannel", 1))
 
-        simulation_mode = self.config.get("simulation_mode", True)
+        # Safe-by-default: a missing `simulation_mode` key means real
+        # hardware. The opposite default (True) silently puts the rig into
+        # simulation on a fresh install or after a typo, which has caused
+        # confusion before. Flag the absence loudly so the operator knows.
+        if "simulation_mode" not in self.config:
+            print("[DAQ] WARNING: 'simulation_mode' key missing from settings.json — "
+                  "defaulting to REAL HARDWARE. Add the key explicitly to silence this.")
+        simulation_mode = bool(self.config.get("simulation_mode", False))
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
 
         if simulation_mode: # Simulation Mode

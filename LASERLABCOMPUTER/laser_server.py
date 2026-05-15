@@ -82,6 +82,12 @@ class LaserServerInterface:
         up but the laser is dead. Does not touch the Matisse hardware."""
         return self.sirah is not None
 
+    def is_simulation(self) -> bool:
+        """True when the server was launched with SIMULATION=1 and is
+        therefore feeding mock data. The DAQ client uses this to refuse to
+        run against a sim server when its own simulation_mode is False."""
+        return bool(SIMULATION)
+
     # ---- CounterDrift ----
 
     def cd_open(self) -> bool:

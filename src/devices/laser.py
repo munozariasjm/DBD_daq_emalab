@@ -55,6 +55,12 @@ class MatisseDevice:
         # None = unknown, True = last call OK, False = last call failed.
         # Used to dedupe noisy outage logs.
         self._healthy = None
+        # Will be set to True/False by _ping_on_startup if the server
+        # supports is_simulation(); None means we couldn't ask.
+        self._server_simulation = None
+        # Whether the DAQ wants real hardware. Real-mode client + sim-mode
+        # server = Frankenstein data; we refuse to operate in that case.
+        self._daq_wants_real = (os.environ.get("SIMULATION", "0") != "1")
         print(f"[Matisse] Connecting to laser server at {self.url} ...")
         self._ping_on_startup()
 
@@ -100,6 +106,11 @@ class MatisseDevice:
         if ok:
             print(f"[Matisse] Server ping OK at {self.url}")
             self._healthy = True
+            # Check whether the server is in simulation mode. Mismatch
+            # between client and server is a serious bug — it produces
+            # Frankenstein data (real tagger events against a mock laser).
+            self._check_sim_mode()
+            return
         else:
             # Server is up but its Matisse handle is None — the laser itself
             # is not initialised. The DAQ can still boot; the operator needs
@@ -114,6 +125,36 @@ class MatisseDevice:
 
     def is_healthy(self) -> bool:
         return self._healthy is True
+
+    def _check_sim_mode(self):
+        """Detect server-side simulation mode and shout if the DAQ wants
+        real hardware but the server is in sim — that combination silently
+        produces real-tagger-vs-mock-laser Frankenstein data."""
+        try:
+            with self.lock:
+                server_is_sim = bool(self.proxy.is_simulation())
+        except xmlrpc.client.Fault:
+            # Older server build without is_simulation(); we can't tell.
+            return
+        except _NETWORK_ERRORS:
+            return
+        self._server_simulation = server_is_sim
+        if server_is_sim and self._daq_wants_real:
+            print("[Matisse] ========== SIMULATION MODE MISMATCH ==========")
+            print(f"[Matisse] Server at {self.url} is running in SIMULATION mode")
+            print("[Matisse] (laser_server.py was launched with SIMULATION=1) but")
+            print("[Matisse] this DAQ has simulation_mode=False, expecting REAL")
+            print("[Matisse] hardware. Every laser command goes to a MOCK laser")
+            print("[Matisse] while the tagger and wavemeter are real — recorded")
+            print("[Matisse] data will be Frankenstein.")
+            print("[Matisse] Fix on the laser-lab machine:")
+            print("[Matisse]   Remove-Item Env:SIMULATION    (PowerShell)")
+            print("[Matisse]   or just open a fresh terminal, then")
+            print("[Matisse]   python LASERLABCOMPUTER/laser_server.py")
+            print("[Matisse] ===============================================")
+            self._healthy = False
+        elif server_is_sim:
+            print("[Matisse] Server is in SIMULATION mode (matches DAQ config).")
 
     # ---- Internal call wrapper ----
 

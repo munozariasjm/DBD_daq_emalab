@@ -31,6 +31,7 @@ Config via env vars:
 """
 
 import os
+import struct
 import sys
 import socket
 import threading
@@ -56,16 +57,27 @@ _MATISSE_PROMPT = "Matisse>"
 
 
 class MatisseTCPClient:
-    """Persistent line-oriented TCP client for Matisse Commander.
+    """Persistent TCP client for Matisse Commander's network server.
 
-    The protocol is plain ASCII: send `<command>\\n`, read until newline.
-    Replies are typically prefixed with `Matisse> ` (the prompt token);
-    we strip it so callers see just the payload (`Ok`, `RUNNING`, a float,
-    or an error like `1,"general syntax error"`).
+    Wire protocol: LabVIEW's TCP "Standard" framing — every message
+    (in both directions) is preceded by a 4-byte big-endian unsigned
+    length field; the payload is exactly that many bytes of ASCII text.
+    Matisse Commander is built on LabVIEW and uses this framing on its
+    Network Server. Sending raw line-terminated commands causes
+    `API Network Server Receive.vi` to read the first 4 bytes as the
+    declared payload length and block waiting for the rest until it
+    times out (LabVIEW Error 56).
+
+    Replies are typically prefixed with `Matisse> ` inside the payload;
+    we strip that so callers see just the meaningful text.
 
     A single socket is held for the lifetime of the laser_server process.
     `ask()` will reconnect once and retry on a transport-level failure
     before propagating the exception."""
+
+    _HEADER_FMT = ">I"
+    _HEADER_LEN = 4
+    _MAX_PAYLOAD = 1_000_000  # sanity cap; real replies are tens of bytes
 
     def __init__(self, host: str, port: int, timeout: float = 5.0):
         self.host = host
@@ -80,29 +92,31 @@ class MatisseTCPClient:
         s.settimeout(self.timeout)
         self.sock = s
         self._buffer = b""
-        # Drain any banner / initial prompt Matisse Commander emits on
-        # connect. We can't know in advance whether there is one, so we
-        # use a very short timeout and discard whatever shows up.
+        # Drain any bytes Matisse Commander may emit on connect. Loop with
+        # a short read timeout until recv blocks (no more pending bytes).
+        # Any data here would mis-correlate subsequent replies if left in
+        # the buffer.
         s.settimeout(0.3)
         try:
-            chunk = s.recv(4096)
-            if chunk:
-                # Banner discarded; only command replies matter.
-                pass
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
         except socket.timeout:
             pass
         s.settimeout(self.timeout)
         print(f"[Matisse-TCP] Connected to Matisse Commander at {self.host}:{self.port}")
 
     def ask(self, cmd: str) -> str:
-        """Send one command, return the single-line reply with the
-        `Matisse> ` prompt stripped. Caller is expected to hold any
-        higher-level lock; this method is NOT internally synchronised."""
-        wire = (cmd.rstrip("\r\n") + "\n").encode("ascii")
+        """Send one command, return the prompt-stripped reply payload.
+        Caller is expected to hold any higher-level lock; this method is
+        NOT internally synchronised."""
+        payload = cmd.encode("ascii")
+        wire = struct.pack(self._HEADER_FMT, len(payload)) + payload
         try:
             self.sock.sendall(wire)
             return self._read_reply()
-        except (OSError, socket.timeout, ConnectionError) as e:
+        except (OSError, socket.timeout, ConnectionError, TimeoutError) as e:
             print(f"[Matisse-TCP] connection lost ({e}); reconnecting and retrying")
             self._reconnect()
             self.sock.sendall(wire)
@@ -119,26 +133,36 @@ class MatisseTCPClient:
         self._connect()
 
     def _read_reply(self) -> str:
-        deadline = time.time() + self.timeout
-        while b"\n" not in self._buffer:
-            if time.time() > deadline:
-                raise TimeoutError(
-                    f"no reply from Matisse Commander at {self.host}:{self.port} "
-                    f"within {self.timeout}s"
-                )
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ConnectionError("Matisse Commander closed the connection")
-            self._buffer += chunk
-        line, _, rest = self._buffer.partition(b"\n")
-        self._buffer = rest
-        text = line.decode("ascii", errors="replace").rstrip("\r").strip()
+        header = self._recv_exactly(self._HEADER_LEN)
+        (length,) = struct.unpack(self._HEADER_FMT, header)
+        if length > self._MAX_PAYLOAD:
+            raise ValueError(
+                f"Implausible reply length {length} bytes from Matisse Commander; "
+                "framing protocol mismatch?"
+            )
+        payload = self._recv_exactly(length) if length else b""
+        text = payload.decode("ascii", errors="replace").rstrip("\r\n").strip()
         # Strip the `Matisse> ` (or `Matisse>`) prompt prefix.
         for prefix in ("Matisse> ", "Matisse>"):
             if text.startswith(prefix):
                 text = text[len(prefix):].lstrip()
                 break
         return text
+
+    def _recv_exactly(self, n: int) -> bytes:
+        while len(self._buffer) < n:
+            try:
+                chunk = self.sock.recv(max(4096, n - len(self._buffer)))
+            except socket.timeout:
+                raise TimeoutError(
+                    f"timed out waiting for {n} bytes from Matisse Commander"
+                )
+            if not chunk:
+                raise ConnectionError("Matisse Commander closed the connection")
+            self._buffer += chunk
+        data = bytes(self._buffer[:n])
+        self._buffer = self._buffer[n:]
+        return data
 
     def close(self):
         if self.sock is not None:

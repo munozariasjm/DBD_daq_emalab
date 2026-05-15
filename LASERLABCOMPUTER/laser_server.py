@@ -1,14 +1,33 @@
-"""XML-RPC bridge to the Sirah Matisse, exposing the MCP CounterDrift / GoTo
-commands documented in update_docs.pdf (pp. 14-20).
+"""XML-RPC bridge to the Sirah Matisse via Matisse Commander's network
+server.
 
-The DAQ runs on a different machine and reaches this server over XML-RPC. All
-hardware access is serialised by a single lock so concurrent XML-RPC threads
-can't interleave Matisse commands.
+Architecture: Matisse Commander (the desktop application that owns the
+laser) runs its own TCP server, configured under
+  Matisse > Communication Options > Network Server Settings
+Default address: 127.0.0.1:30000. That server understands the MCP commands
+documented in update_docs.pdf (pp. 14-20). The laser's DSP firmware over
+USB-VISA does NOT — it speaks low-level DSP commands and rejects every
+`MCP_WM_*` token with `1,"general syntax error"`. It also races Matisse
+Commander for the USB resource (`VI_ERROR_RSRC_LOCKED`).
 
-Operator-side requirement: in Matisse Commander, set Display Options >
-Position Display Mode = nm AND the CounterDrift dialog Unit = nm. The DAQ
-sends nm-vacuum values; if the Matisse is set to cm^-1 the laser will be
-commanded to wildly wrong frequencies.
+This server therefore opens a plain TCP socket to Matisse Commander and
+forwards MCP commands as ASCII lines. No `#SERVER ` prefix is sent: that
+prefix is the routing token for Matisse Commander's interactive Command
+Console, where it tells the console "send this to the server" — but when
+you're already connected to the server over TCP there is nothing to
+route.
+
+Operator-side requirement (in Matisse Commander):
+  - Display Options > Position Display Mode = nm
+  - CounterDrift dialog > Unit = nm
+  - Communication Options > Enable Server checked, port matches MATISSE_PORT
+The DAQ sends every setpoint in nm vacuum; if Commander's units are cm^-1
+the laser will be driven catastrophically off target.
+
+Config via env vars:
+  MATISSE_HOST   Matisse Commander network server host (default 127.0.0.1)
+  MATISSE_PORT   Matisse Commander network server port (default 30000)
+  SIMULATION     "1" to use the MockMatisseDevice in place of TCP
 """
 
 import os
@@ -26,16 +45,108 @@ SIMULATION = os.environ.get("SIMULATION", "0") == "1"
 if SIMULATION:
     print("[Server] SIMULATION MODE ENABLED")
     from src.simulation.hardware_mocks import MockMatisseDevice
-else:
-    try:
-        from pylablib.devices import Sirah
-    except ImportError as e:
-        print(f"[Server] Hardware libraries missing: {e}. Use SIMULATION=1 for testing.")
-        sys.exit(1)
 
-SIRAH_USB_RESOURCE = "USB0::0x17E7::0x0102::24-50-09::INSTR"
+MATISSE_HOST = os.environ.get("MATISSE_HOST", "127.0.0.1")
+MATISSE_PORT = int(os.environ.get("MATISSE_PORT", "30000"))
 SERVER_IP = "0.0.0.0"
 SERVER_PORT = 8000
+
+# Replies from Matisse Commander are prefixed with this prompt; we strip it.
+_MATISSE_PROMPT = "Matisse>"
+
+
+class MatisseTCPClient:
+    """Persistent line-oriented TCP client for Matisse Commander.
+
+    The protocol is plain ASCII: send `<command>\\n`, read until newline.
+    Replies are typically prefixed with `Matisse> ` (the prompt token);
+    we strip it so callers see just the payload (`Ok`, `RUNNING`, a float,
+    or an error like `1,"general syntax error"`).
+
+    A single socket is held for the lifetime of the laser_server process.
+    `ask()` will reconnect once and retry on a transport-level failure
+    before propagating the exception."""
+
+    def __init__(self, host: str, port: int, timeout: float = 5.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.sock = None
+        self._buffer = b""
+        self._connect()
+
+    def _connect(self):
+        s = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        s.settimeout(self.timeout)
+        self.sock = s
+        self._buffer = b""
+        # Drain any banner / initial prompt Matisse Commander emits on
+        # connect. We can't know in advance whether there is one, so we
+        # use a very short timeout and discard whatever shows up.
+        s.settimeout(0.3)
+        try:
+            chunk = s.recv(4096)
+            if chunk:
+                # Banner discarded; only command replies matter.
+                pass
+        except socket.timeout:
+            pass
+        s.settimeout(self.timeout)
+        print(f"[Matisse-TCP] Connected to Matisse Commander at {self.host}:{self.port}")
+
+    def ask(self, cmd: str) -> str:
+        """Send one command, return the single-line reply with the
+        `Matisse> ` prompt stripped. Caller is expected to hold any
+        higher-level lock; this method is NOT internally synchronised."""
+        wire = (cmd.rstrip("\r\n") + "\n").encode("ascii")
+        try:
+            self.sock.sendall(wire)
+            return self._read_reply()
+        except (OSError, socket.timeout, ConnectionError) as e:
+            print(f"[Matisse-TCP] connection lost ({e}); reconnecting and retrying")
+            self._reconnect()
+            self.sock.sendall(wire)
+            return self._read_reply()
+
+    def _reconnect(self):
+        try:
+            if self.sock is not None:
+                self.sock.close()
+        except Exception:
+            pass
+        self.sock = None
+        self._buffer = b""
+        self._connect()
+
+    def _read_reply(self) -> str:
+        deadline = time.time() + self.timeout
+        while b"\n" not in self._buffer:
+            if time.time() > deadline:
+                raise TimeoutError(
+                    f"no reply from Matisse Commander at {self.host}:{self.port} "
+                    f"within {self.timeout}s"
+                )
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("Matisse Commander closed the connection")
+            self._buffer += chunk
+        line, _, rest = self._buffer.partition(b"\n")
+        self._buffer = rest
+        text = line.decode("ascii", errors="replace").rstrip("\r").strip()
+        # Strip the `Matisse> ` (or `Matisse>`) prompt prefix.
+        for prefix in ("Matisse> ", "Matisse>"):
+            if text.startswith(prefix):
+                text = text[len(prefix):].lstrip()
+                break
+        return text
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
 
 
 class ThreadedXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
@@ -53,25 +164,29 @@ class LaserServerInterface:
             if SIMULATION:
                 self.sirah = MockMatisseDevice()
             else:
-                self.sirah = Sirah.SirahMatisse(SIRAH_USB_RESOURCE)
+                self.sirah = MatisseTCPClient(MATISSE_HOST, MATISSE_PORT)
             print("[Server] Matisse ready.")
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
+            print(f"[Server] Could not reach Matisse Commander at "
+                  f"{MATISSE_HOST}:{MATISSE_PORT}.")
+            print("[Server] Confirm Matisse Commander is running and that")
+            print("[Server] Communication Options -> Enable Server is checked.")
             self.sirah = None
 
     def _ask(self, cmd: str) -> str:
-        """Send a single MCP command and return the raw reply string.
+        """Send a raw MCP command and return the prompt-stripped reply.
 
-        All MCP commands must be routed through Matisse Commander's server
-        processor, signalled by the `#SERVER ` prefix (see docs pp. 14-20).
-        Without that prefix the command interpreter sees the bare
-        `MCP_WM_*` token, doesn't recognise it as a top-level command, and
-        replies `1,"general syntax error"`."""
+        We do NOT prepend `#SERVER `: that prefix is the Matisse Commander
+        Command Console routing token, useful when typing into the
+        Commander UI to forward a command to its server subsystem. When
+        we are already connected to the network server over TCP, the
+        routing is implicit and adding `#SERVER ` would itself produce
+        `1,"general syntax error"`."""
         if self.sirah is None:
             raise RuntimeError("Matisse not initialised")
-        full_cmd = cmd if cmd.lstrip().startswith("#SERVER") else f"#SERVER {cmd}"
         with self.lock:
-            reply = self.sirah.ask(full_cmd)
+            reply = self.sirah.ask(cmd)
         return reply if reply is not None else ""
 
     # ---- Reachability ----
@@ -175,6 +290,7 @@ if __name__ == "__main__":
 
     print("==========================================")
     print(f" LASER SERVER RUNNING ON PORT {SERVER_PORT}")
+    print(f" Matisse Commander -> {MATISSE_HOST}:{MATISSE_PORT}")
     print("==========================================")
     try:
         print("Server active. Press Ctrl+C to stop.")

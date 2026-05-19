@@ -71,11 +71,17 @@ class SettingsManager:
             with open(self.config_path, 'r') as f:
                 user_settings = json.load(f)
 
-            # Merge with defaults to ensure all keys exist
-            # This is a shallow merge for sections
+            # Shallow merge with defaults. Top-level values are usually dicts
+            # (the section blocks), but a few are scalars (e.g. simulation_mode).
+            # Only attempt dict.update() when BOTH sides are dicts; otherwise
+            # the user's value overrides outright.
             merged = self.DEFAULT_SETTINGS.copy()
             for section, values in user_settings.items():
-                if section in merged:
+                if (
+                    section in merged
+                    and isinstance(merged[section], dict)
+                    and isinstance(values, dict)
+                ):
                     merged[section].update(values)
                 else:
                     merged[section] = values

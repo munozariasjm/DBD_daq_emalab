@@ -292,6 +292,26 @@ def test_unit_check_refuses_on_wavemeter_disagreement():
     assert not ctrl.is_locked
 
 
+def test_unit_check_proceeds_when_wm_plugin_unavailable():
+    """Matisse Commander without the WM Selector Plugin replies `!ERROR` to
+    MCP_WM_GET_WAVELENGTH; the server returns 0.0. We must NOT refuse to
+    engage in that case — we just can't cross-check the unit setting, so
+    we log and trust the operator's configuration."""
+    matisse = FakeMatisse()
+    matisse.matisse_nm = 0.0  # WM plugin not loaded
+    epics = FakeEpics(12625.0)
+    ctrl = _make_controller(matisse, epics)
+
+    ctrl.set_wavenumber(12625.0)
+    assert _wait_for(lambda: ctrl.is_locked, timeout=2.0), \
+        "controller refused to engage when Matisse WM plugin unavailable"
+    ctrl.stop()
+
+    # We did engage — cd_activate(True) and cd_setpoint were sent.
+    assert ("cd_activate", (True,)) in matisse.calls
+    assert "cd_setpoint" in matisse.names()
+
+
 def test_unit_check_runs_once_per_lifetime():
     """After a successful check, subsequent set_wavenumber calls should not
     re-issue cd_get_wavelength — the check is one-shot per controller."""

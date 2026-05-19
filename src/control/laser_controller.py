@@ -166,34 +166,44 @@ class LaserController:
         """One-time pre-flight: do the Matisse and the EPICS wavemeter agree
         on the current laser wavelength?
 
-        `MCP_WM_GET_WAVELENGTH` always returns nm vacuum (docs p. 14); the
-        EPICS PV returns cm⁻¹. If the values disagree, this almost always
-        means one of:
+        `MCP_WM_GET_WAVELENGTH` returns nm vacuum (docs p. 14) but *requires
+        the Matisse Commander "WM Selector Plugin"*. Many lab installations
+        do not load that plugin (this lab uses a separate HighFinesse
+        wavemeter via EPICS), in which case Matisse Commander replies
+        `!ERROR` and the server returns 0.0. That is NOT a fault — it just
+        means we cannot cross-check the Matisse Display Unit and must trust
+        the operator's one-time configuration (per README).
 
-          1. Matisse Commander Display Unit / CounterDrift Unit is cm⁻¹
-             instead of nm — every setpoint we send will be interpreted in
-             the wrong unit and the laser will be driven catastrophically
-             far from target. Detected when the Matisse reading numerically
-             matches the wavemeter's cm⁻¹ value (the Matisse is reporting
-             its own readout in the wrong unit).
-          2. Wrong wavemeter channel / PV — the EPICS reading isn't this
-             laser at all. Detected when the two readings don't match in
-             either interpretation.
-          3. Matisse or wavemeter offline — read returned 0 or non-finite.
+        We refuse to engage only when we have a *definitive* mismatch — i.e.
+        a real Matisse reading that numerically matches the wavemeter in
+        cm⁻¹ (the catastrophic Display-Unit-set-to-cm⁻¹ case), or two real
+        readings that disagree on which laser this is. A zero/missing
+        Matisse reading is logged once and ignored.
 
-        Returns True if everything looks sane and the controller may engage.
-        On failure, prints a loud banner explaining what to fix and returns
-        False. The control loop then refuses to activate CounterDrift."""
+        Returns True if everything looks sane (or unverifiable) and the
+        controller may engage. Returns False only on a definitive mismatch."""
         try:
             matisse_reading = float(self.matisse.cd_get_wavelength())
         except Exception as e:
-            print(f"[Laser] Pre-flight unit check: cd_get_wavelength raised: {e}")
-            return False
-        wn = self.get_wavenumber()
-        if matisse_reading <= 0 or wn <= 0:
             print(
-                f"[Laser] Pre-flight unit check: zero/negative reading "
-                f"(Matisse={matisse_reading}, EPICS={wn}). Refusing to engage."
+                f"[Laser] Pre-flight unit check: cd_get_wavelength raised "
+                f"({e}); skipping cross-check. Operator must ensure Matisse "
+                "Display Unit and CounterDrift Unit are both set to nm."
+            )
+            return True
+        wn = self.get_wavenumber()
+        if matisse_reading <= 0:
+            print(
+                f"[Laser] Pre-flight unit check: Matisse returned {matisse_reading} "
+                "(WM Selector Plugin likely not loaded in Matisse Commander). "
+                "Proceeding — operator must confirm Display Unit / CounterDrift "
+                "Unit are both nm."
+            )
+            return True
+        if wn <= 0:
+            print(
+                f"[Laser] Pre-flight unit check: wavemeter returned {wn} cm^-1. "
+                "Refusing to engage until EPICS wavemeter is online."
             )
             return False
 

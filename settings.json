@@ -1,11 +1,11 @@
 {
     "scan_settings": {
-        "start_wn": 12624.91,
-        "end_wn": 12624.88,
-        "step_size": 1e-06,
+        "start_wn": 12625.18,
+        "end_wn": 12625.205,
+        "step_size": 0.0005,
         "stop_mode": "time",
         "stop_val": 8.0,
-        "loops": 3,
+        "loops": 2,
         "min_wn": 12625.18,
         "max_wn": 12625.21
     },

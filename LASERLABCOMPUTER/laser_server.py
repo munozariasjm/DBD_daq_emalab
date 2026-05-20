@@ -129,11 +129,14 @@ class MatisseTCPClient:
     _HEADER_LEN = 4
     _MAX_PAYLOAD = 1_000_000  # sanity cap; real replies are tens of bytes
 
-    def __init__(self, host: str, port: int, timeout: float = 30.0):
-        # 30 s default: opening MCP dialogs (CounterDrift / GoTo / etc.)
-        # touches the LabVIEW UI thread and can take several seconds on
-        # first invocation. Network round-trips for status/getter commands
-        # finish in milliseconds; the timeout is the worst-case ceiling.
+    def __init__(self, host: str, port: int, timeout: float = 120.0):
+        # 120 s default: opening MCP dialogs (CounterDrift / GoTo) on a
+        # cold Matisse Commander -- first MCP call after launch, or while
+        # the Wavemeter Plugin is still initialising its widgets -- can
+        # take 30-90 s before the reply lands. Status/getter commands
+        # finish in milliseconds, so the high ceiling only matters on the
+        # rare slow ops; it's not a per-op latency, just a worst-case
+        # ceiling before we declare the connection broken.
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -212,16 +215,38 @@ class MatisseTCPClient:
         return text
 
     def _recv_exactly(self, n: int) -> bytes:
+        # Use a short per-recv timeout so we can emit a heartbeat during
+        # long waits (cold dialog opens can take 30-90 s) instead of going
+        # silent. The total wait is still bounded by self.timeout.
+        deadline = time.time() + self.timeout
+        tick = 5.0
+        next_tick = time.time() + tick
+        start = time.time()
         while len(self._buffer) < n:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"timed out waiting for {n} bytes from Matisse Commander "
+                    f"after {self.timeout:.0f}s"
+                )
+            slot = min(remaining, max(0.01, next_tick - time.time()))
+            self.sock.settimeout(slot)
             try:
                 chunk = self.sock.recv(max(4096, n - len(self._buffer)))
             except socket.timeout:
-                raise TimeoutError(
-                    f"timed out waiting for {n} bytes from Matisse Commander"
-                )
+                if time.time() >= next_tick:
+                    elapsed = time.time() - start
+                    print(
+                        f"[{_ts()}] [Matisse-TCP] still waiting for reply "
+                        f"({elapsed:.0f} s elapsed of {self.timeout:.0f} s)..."
+                    )
+                    next_tick = time.time() + tick
+                continue
             if not chunk:
                 raise ConnectionError("Matisse Commander closed the connection")
             self._buffer += chunk
+        # Restore full timeout for subsequent operations.
+        self.sock.settimeout(self.timeout)
         data = bytes(self._buffer[:n])
         self._buffer = self._buffer[n:]
         return data

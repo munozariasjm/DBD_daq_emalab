@@ -30,14 +30,64 @@ Config via env vars:
   SIMULATION     "1" to use the MockMatisseDevice in place of TCP
 """
 
+import functools
 import os
 import struct
 import sys
 import socket
 import threading
 import time
-from xmlrpc.server import SimpleXMLRPCServer
+from datetime import datetime
+from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
 from socketserver import ThreadingMixIn
+
+
+def _ts() -> str:
+    """Wall-clock timestamp prefix, millisecond resolution."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
+def _truncate(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 3] + "..."
+
+
+def _format_args(args, kwargs) -> str:
+    parts = [repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()]
+    return _truncate(", ".join(parts), 80)
+
+
+def _log_call(method):
+    """Wrap a LaserServerInterface method so every XML-RPC invocation prints
+    its name, args, result, and wall-clock duration. Re-raises so XML-RPC
+    fault semantics survive."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        try:
+            result = method(self, *args, **kwargs)
+        except Exception as e:
+            ms = (time.perf_counter() - t0) * 1000
+            print(
+                f"[{_ts()}] [Server] {method.__name__}({_format_args(args, kwargs)}) "
+                f"RAISED {type(e).__name__}: {e} ({ms:.0f} ms)"
+            )
+            raise
+        ms = (time.perf_counter() - t0) * 1000
+        print(
+            f"[{_ts()}] [Server] {method.__name__}({_format_args(args, kwargs)}) "
+            f"-> {_truncate(repr(result), 60)} ({ms:.0f} ms)"
+        )
+        return result
+    return wrapper
+
+
+class _QuietRequestHandler(SimpleXMLRPCRequestHandler):
+    """Silences BaseHTTPRequestHandler's default access log
+    (`1.2.3.4 - - [date] "POST /RPC2 HTTP/1.1" 200 -`) so the per-call
+    decorator's line is the only thing on stdout for each request."""
+
+    def log_message(self, format, *args):
+        pass
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
@@ -213,7 +263,9 @@ class LaserServerInterface:
     def _ask(self, cmd: str) -> str:
         """Send a raw MCP command and return the prompt-stripped reply.
 
-        We do NOT prepend `#SERVER `: that prefix is the Matisse Commander
+        Logs the wire-level command + reply + duration so the operator can
+        see exactly what the Matisse is being asked at any moment. We do
+        NOT prepend `#SERVER `: that prefix is the Matisse Commander
         Command Console routing token, useful when typing into the
         Commander UI to forward a command to its server subsystem. When
         we are already connected to the network server over TCP, the
@@ -221,18 +273,27 @@ class LaserServerInterface:
         `1,"general syntax error"`."""
         if self.sirah is None:
             raise RuntimeError("Matisse not initialised")
+        t0 = time.perf_counter()
         with self.lock:
             reply = self.sirah.ask(cmd)
-        return reply if reply is not None else ""
+        ms = (time.perf_counter() - t0) * 1000
+        reply = reply if reply is not None else ""
+        print(
+            f"[{_ts()}] [MCP]    {_truncate(cmd, 80)} -> "
+            f"{_truncate(reply, 80)} ({ms:.0f} ms)"
+        )
+        return reply
 
     # ---- Reachability ----
 
+    @_log_call
     def ping(self) -> bool:
         """Cheap probe used by the DAQ on connect. Returns True if the server
         is up AND the Matisse handle was initialised; False if the server is
         up but the laser is dead. Does not touch the Matisse hardware."""
         return self.sirah is not None
 
+    @_log_call
     def is_simulation(self) -> bool:
         """True when the server was launched with SIMULATION=1 and is
         therefore feeding mock data. The DAQ client uses this to refuse to
@@ -241,73 +302,82 @@ class LaserServerInterface:
 
     # ---- CounterDrift ----
 
+    @_log_call
     def cd_open(self) -> bool:
         try:
             self._ask("MCP_WM_CounterDrift")
             return True
         except Exception as e:
-            print(f"[Server] cd_open error: {e}")
+            print(f"[{_ts()}] [Server] cd_open error: {e}")
             return False
 
+    @_log_call
     def cd_setpoint(self, nm: float) -> bool:
         try:
             self._ask(f"MCP_WM.Counterdrift Setpoint {float(nm)}")
             return True
         except Exception as e:
-            print(f"[Server] cd_setpoint({nm}) error: {e}")
+            print(f"[{_ts()}] [Server] cd_setpoint({nm}) error: {e}")
             return False
 
+    @_log_call
     def cd_activate(self, state: bool) -> bool:
         try:
             self._ask(f"MCP_WM.Counterdrift Activate {'true' if state else 'false'}")
             return True
         except Exception as e:
-            print(f"[Server] cd_activate({state}) error: {e}")
+            print(f"[{_ts()}] [Server] cd_activate({state}) error: {e}")
             return False
 
+    @_log_call
     def cd_get_wavelength(self) -> float:
         try:
             reply = self._ask("MCP_WM_GET_WAVELENGTH")
             return float(reply.split()[0])
         except Exception as e:
-            print(f"[Server] cd_get_wavelength error: {e}")
+            print(f"[{_ts()}] [Server] cd_get_wavelength error: {e}")
             return 0.0
 
     # ---- GoTo ----
 
+    @_log_call
     def goto_open(self) -> bool:
         try:
             self._ask("MCP_WM_GotoPosition")
             return True
         except Exception as e:
-            print(f"[Server] goto_open error: {e}")
+            print(f"[{_ts()}] [Server] goto_open error: {e}")
             return False
 
+    @_log_call
     def goto_set(self, nm: float) -> bool:
         try:
             self._ask(f"MCP_WM.GoTo Goto {float(nm)}")
             return True
         except Exception as e:
-            print(f"[Server] goto_set({nm}) error: {e}")
+            print(f"[{_ts()}] [Server] goto_set({nm}) error: {e}")
             return False
 
+    @_log_call
     def goto_start(self) -> bool:
         try:
             self._ask("MCP_WM.GoTo Start")
             return True
         except Exception as e:
-            print(f"[Server] goto_start error: {e}")
+            print(f"[{_ts()}] [Server] goto_start error: {e}")
             return False
 
+    @_log_call
     def goto_status(self) -> str:
         try:
             return self._ask("MCP_WM.GoTo status").strip().upper() or "STOP"
         except Exception as e:
-            print(f"[Server] goto_status error: {e}")
+            print(f"[{_ts()}] [Server] goto_status error: {e}")
             return "STOP"
 
     # ---- Lifecycle ----
 
+    @_log_call
     def close(self) -> bool:
         try:
             if self.sirah is not None:
@@ -315,13 +385,17 @@ class LaserServerInterface:
                     self.sirah.close()
             return True
         except Exception as e:
-            print(f"[Server] close error: {e}")
+            print(f"[{_ts()}] [Server] close error: {e}")
             return False
 
 
 if __name__ == "__main__":
     socket.setdefaulttimeout(120)
-    server = ThreadedXMLRPCServer((SERVER_IP, SERVER_PORT), allow_none=True)
+    server = ThreadedXMLRPCServer(
+        (SERVER_IP, SERVER_PORT),
+        requestHandler=_QuietRequestHandler,
+        allow_none=True,
+    )
     server.register_instance(LaserServerInterface())
 
     print("==========================================")

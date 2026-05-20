@@ -276,15 +276,22 @@ class LaserController:
         except Exception as e:
             print(f"[Laser] goto_set/start failed: {e}")
             return False
+        import time as _time
+        t_start = _time.time()
+        polls = 0
         while not self.stop_event.is_set():
             try:
                 status = self.matisse.goto_status()
             except Exception as e:
                 print(f"[Laser] goto_status failed: {e}")
                 return False
+            polls += 1
             if status.upper() == "STOP":
+                elapsed = _time.time() - t_start
+                print(f"[Laser] GoTo complete after {elapsed:.1f} s ({polls} polls)")
                 return True
             if self._sleep(self.poll_interval):
+                print(f"[Laser] GoTo interrupted by stop_event after {polls} polls")
                 return False
         return False
 
@@ -346,21 +353,29 @@ class LaserController:
                 self.is_locked = False
                 self._wm_buffer.clear()
 
-            # Verify lock by wavemeter
+            # Verify lock by wavemeter. `printed_locked` tracks whether the
+            # LOCK ACQUIRED message has been emitted since the last LOCK LOST
+            # — only print on transitions, not on every sample.
             stable_samples = 0
-            locked_once = False
+            printed_locked = False
             while not self.stop_event.is_set():
                 if self._target_changed.is_set():
                     break  # re-aim from the outer loop
                 wn = self._averaged_wavemeter()
                 with self.lock:
                     cur_target = self.target_wn
-                if abs(wn - cur_target) < self.tolerance:
+                delta = abs(wn - cur_target)
+                if delta < self.tolerance:
                     stable_samples += 1
                     if stable_samples >= self.required_stable_samples:
                         with self.lock:
                             self.is_locked = True
-                        locked_once = True
+                        if not printed_locked:
+                            print(
+                                f"[Laser] LOCK ACQUIRED at {wn:.6f} cm^-1 "
+                                f"(target {cur_target:.6f}, |Δ|={delta:.2e})"
+                            )
+                            printed_locked = True
                         if not self.continuous:
                             break
                         if self._sleep(self.poll_interval):
@@ -368,9 +383,14 @@ class LaserController:
                         continue
                 else:
                     stable_samples = 0
-                    if locked_once:
+                    if printed_locked:
                         with self.lock:
                             self.is_locked = False
+                        print(
+                            f"[Laser] LOCK LOST at {wn:.6f} cm^-1 "
+                            f"(target {cur_target:.6f}, |Δ|={delta:.2e})"
+                        )
+                        printed_locked = False
                 if self._sleep(self.poll_interval):
                     break
 

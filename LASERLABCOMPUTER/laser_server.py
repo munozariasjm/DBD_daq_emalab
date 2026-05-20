@@ -79,7 +79,11 @@ class MatisseTCPClient:
     _HEADER_LEN = 4
     _MAX_PAYLOAD = 1_000_000  # sanity cap; real replies are tens of bytes
 
-    def __init__(self, host: str, port: int, timeout: float = 5.0):
+    def __init__(self, host: str, port: int, timeout: float = 30.0):
+        # 30 s default: opening MCP dialogs (CounterDrift / GoTo / etc.)
+        # touches the LabVIEW UI thread and can take several seconds on
+        # first invocation. Network round-trips for status/getter commands
+        # finish in milliseconds; the timeout is the worst-case ceiling.
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -110,14 +114,22 @@ class MatisseTCPClient:
     def ask(self, cmd: str) -> str:
         """Send one command, return the prompt-stripped reply payload.
         Caller is expected to hold any higher-level lock; this method is
-        NOT internally synchronised."""
+        NOT internally synchronised.
+
+        On any failure (timeout or socket error) we reopen the connection
+        and retry once. The reconnect guarantees that a *late* reply from
+        a timed-out previous command can't pollute the next request's
+        reply buffer. Matisse Commander may log Error 62 ('TCP Write
+        ... connection aborted') when this happens — that's a transient,
+        not a fault. The timeout is set generously (30 s) so this is
+        rare in practice."""
         payload = cmd.encode("ascii")
         wire = struct.pack(self._HEADER_FMT, len(payload)) + payload
         try:
             self.sock.sendall(wire)
             return self._read_reply()
         except (OSError, socket.timeout, ConnectionError, TimeoutError) as e:
-            print(f"[Matisse-TCP] connection lost ({e}); reconnecting and retrying")
+            print(f"[Matisse-TCP] {type(e).__name__}: {e}; reconnecting and retrying once")
             self._reconnect()
             self.sock.sendall(wire)
             return self._read_reply()

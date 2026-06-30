@@ -107,7 +107,6 @@ class MainWindow(QMainWindow):
         self.plot_widget.set_auto_scale(self.plot_options_widget.chk_auto_scale.isChecked())
 
         self.was_running = False
-        self._voltage_limit_warned = False
 
     def _on_tof_online_toggled(self, enabled):
         self.daq.tof_online_mode = enabled
@@ -294,18 +293,6 @@ class MainWindow(QMainWindow):
 
         self.was_running = status['is_running']
 
-        # Voltage limit popup
-        if hasattr(self.daq, 'laser') and self.daq.laser is not None:
-            if self.daq.laser.voltage_limited and not self._voltage_limit_warned:
-                QMessageBox.warning(
-                    self, "Voltage Limit Reached",
-                    "The laser controller has hit a voltage limit "
-                    f"({self.daq.laser.voltage_min}V - {self.daq.laser.voltage_max}V).\n\n"
-                    "The system may not be able to reach the requested wavenumber."
-                )
-                self._voltage_limit_warned = True
-            elif not self.daq.laser.voltage_limited:
-                self._voltage_limit_warned = False
 
     def closeEvent(self, event):
         params = self.params_widget.get_params()

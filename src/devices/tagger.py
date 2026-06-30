@@ -41,8 +41,8 @@ def compute_tof_from_data(data: pd.DataFrame):
             tofs.append(flops_to_time(tof))
     return np.array(tofs)
 
-INIT_TIME = 1e-9
-STOP_TIME_WINDOW = 3e-4
+INIT_TIME = 4.5e-6
+STOP_TIME_WINDOW = 5.4e-6
 
 class Tagger:
     """
@@ -65,6 +65,8 @@ class Tagger:
         self.init_card()
         self.set_trigger_level(0.5)
         self.set_channel_level(1,-0.2)
+        for channel in range(4):
+            self.set_channel_window(channel,self.starts[channel],self.stops[channel])
         self.set_trigger_falling()
         print('card initialized')
 

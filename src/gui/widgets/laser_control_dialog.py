@@ -1,161 +1,174 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QDoubleSpinBox,
-                             QDialogButtonBox, QLabel, QComboBox, QGroupBox)
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QSpinBox
+"""Laser control settings dialog for CounterDrift-based stabilization.
+
+All quantities the operator sees here are in wavenumber (cm^-1) or seconds.
+The nm-vacuum conversion to the Matisse happens inside the controller; it is
+never exposed in the UI.
+"""
+
+from PyQt5.QtCore import QPoint
+from PyQt5.QtGui import QCursor
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+PARAM_HELP = {
+    "tolerance": "Max |wavemeter − target| (cm⁻¹) that still counts as on-target.",
+    "goto_threshold": "If the target is farther than this (cm⁻¹), run a coarse GoTo before locking.",
+    "poll_interval": "Seconds between wavemeter reads while waiting for the lock to settle.",
+    "required_stable_samples": "Consecutive in-tolerance reads required to declare the laser locked.",
+    "wavechannel": "Wavemeter channel index (LaserLab:wavenumber_N) used as the lock reference.",
+    "wm_averaging_samples": "Rolling-average window size applied to wavemeter reads.",
+    "dialog_open_delay": "Seconds to wait after opening the CounterDrift / GoTo dialogs.",
+    "activation_delay": "Seconds to wait after a fresh Activate(true) before judging stability.",
+    "setpoint_settle": "Seconds to wait after changing the setpoint while already locked.",
+    "continuous": "Keep holding the lock after the first success (continuous CounterDrift).",
+}
+
+
+def _help_button(text: str) -> QToolButton:
+    btn = QToolButton()
+    btn.setText("?")
+    btn.setAutoRaise(True)
+    btn.setToolTip(text)
+    btn.setStyleSheet(
+        "QToolButton { color: #4a6fa5; font-weight: bold; padding: 0 4px; }"
+    )
+
+    def show_help():
+        QToolTip.showText(QCursor.pos() + QPoint(8, 8), text, btn)
+
+    btn.clicked.connect(show_help)
+    return btn
+
+
+def _labeled(text: str, key: str) -> QWidget:
+    """Compose 'Label  ?' for the left column of a QFormLayout row."""
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(4)
+    lay.addWidget(QLabel(text))
+    lay.addWidget(_help_button(PARAM_HELP[key]))
+    lay.addStretch(1)
+    return w
+
 
 class LaserControlDialog(QDialog):
     def __init__(self, current_settings: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Laser Control Settings")
-        self.resize(350, 400)
-        self.settings = current_settings.copy()
+        self.setWindowTitle("Laser Control (CounterDrift)")
+        self.resize(420, 460)
+        self.settings = dict(current_settings)
 
-        self.layout = QVBoxLayout(self)
-        self.form_layout = QFormLayout()
+        layout = QVBoxLayout(self)
 
-        # Controller mode selector
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["PID", "Bang-Bang"])
-        current_mode = self.settings.get("controller_mode", "pid")
-        self.mode_combo.setCurrentIndex(0 if current_mode == "pid" else 1)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        self.form_layout.addRow("Controller Mode:", self.mode_combo)
+        # --- Lock parameters ---
+        lock_group = QGroupBox("Lock parameters")
+        lock_form = QFormLayout()
 
-        # Tolerance
         self.tolerance_spin = QDoubleSpinBox()
-        self.tolerance_spin.setRange(0.0001, 1.0)
-        self.tolerance_spin.setDecimals(4)
-        self.tolerance_spin.setValue(self.settings.get("tolerance", 0.01))
-        self.form_layout.addRow("Tolerance (cm\u207b\u00b9):", self.tolerance_spin)
+        self.tolerance_spin.setDecimals(7)
+        self.tolerance_spin.setRange(1e-7, 1.0)
+        self.tolerance_spin.setSingleStep(1e-6)
+        self.tolerance_spin.setValue(float(self.settings.get("tolerance", 1e-5)))
+        lock_form.addRow(_labeled("Tolerance (cm⁻¹)", "tolerance"), self.tolerance_spin)
 
-        # Poll Interval
+        self.goto_threshold_spin = QDoubleSpinBox()
+        self.goto_threshold_spin.setDecimals(7)
+        self.goto_threshold_spin.setRange(1e-7, 1.0)
+        self.goto_threshold_spin.setSingleStep(1e-5)
+        self.goto_threshold_spin.setValue(float(self.settings.get("goto_threshold", 0.01)))
+        lock_form.addRow(_labeled("GoTo threshold (cm⁻¹)", "goto_threshold"), self.goto_threshold_spin)
+
         self.poll_spin = QDoubleSpinBox()
-        self.poll_spin.setRange(0.001, 5.0)
         self.poll_spin.setDecimals(3)
+        self.poll_spin.setRange(0.001, 5.0)
         self.poll_spin.setSingleStep(0.01)
-        self.poll_spin.setValue(self.settings.get("poll_interval", 0.5))
-        self.form_layout.addRow("Poll Interval (s):", self.poll_spin)
+        self.poll_spin.setValue(float(self.settings.get("poll_interval", 0.5)))
+        lock_form.addRow(_labeled("Poll interval (s)", "poll_interval"), self.poll_spin)
 
-        # Stable Samples
         self.stable_samples_spin = QSpinBox()
-        self.stable_samples_spin.setRange(1, 20)
+        self.stable_samples_spin.setRange(1, 50)
         self.stable_samples_spin.setValue(int(self.settings.get("required_stable_samples", 4)))
-        self.form_layout.addRow("Stable Samples:", self.stable_samples_spin)
+        lock_form.addRow(_labeled("Stable samples", "required_stable_samples"), self.stable_samples_spin)
 
-        # Wavemeter Channel
         self.channel_spin = QSpinBox()
         self.channel_spin.setRange(1, 4)
-        self.channel_spin.setValue(int(self.settings.get("wavechannel", 3)))
-        self.form_layout.addRow("Wavemeter Channel:", self.channel_spin)
+        self.channel_spin.setValue(int(self.settings.get("wavechannel", 1)))
+        lock_form.addRow(_labeled("Wavemeter channel", "wavechannel"), self.channel_spin)
 
-        self.layout.addLayout(self.form_layout)
+        self.wm_avg_spin = QSpinBox()
+        self.wm_avg_spin.setRange(1, 200)
+        self.wm_avg_spin.setValue(int(self.settings.get("wm_averaging_samples", 5)))
+        lock_form.addRow(_labeled("WM averaging samples", "wm_averaging_samples"), self.wm_avg_spin)
 
-        # --- Voltage Limits ---
-        self.voltage_group = QGroupBox("Voltage Limits")
-        voltage_layout = QFormLayout()
+        lock_group.setLayout(lock_form)
+        layout.addWidget(lock_group)
 
-        self.voltage_min_spin = QDoubleSpinBox()
-        self.voltage_min_spin.setRange(0.0, 10.0)
-        self.voltage_min_spin.setDecimals(2)
-        self.voltage_min_spin.setSingleStep(0.1)
-        self.voltage_min_spin.setValue(self.settings.get("voltage_min", 0.0))
-        voltage_layout.addRow("Min Voltage (V):", self.voltage_min_spin)
+        # --- Timing / settling ---
+        settle_group = QGroupBox("Timing / settling (s)")
+        settle_form = QFormLayout()
 
-        self.voltage_max_spin = QDoubleSpinBox()
-        self.voltage_max_spin.setRange(0.0, 10.0)
-        self.voltage_max_spin.setDecimals(2)
-        self.voltage_max_spin.setSingleStep(0.1)
-        self.voltage_max_spin.setValue(self.settings.get("voltage_max", 5.0))
-        voltage_layout.addRow("Max Voltage (V):", self.voltage_max_spin)
+        self.dialog_open_spin = QDoubleSpinBox()
+        self.dialog_open_spin.setDecimals(3)
+        self.dialog_open_spin.setRange(0.0, 10.0)
+        self.dialog_open_spin.setSingleStep(0.05)
+        self.dialog_open_spin.setValue(float(self.settings.get("dialog_open_delay", 0.3)))
+        settle_form.addRow(_labeled("Dialog-open delay", "dialog_open_delay"), self.dialog_open_spin)
 
-        self.voltage_group.setLayout(voltage_layout)
-        self.layout.addWidget(self.voltage_group)
+        self.activation_spin = QDoubleSpinBox()
+        self.activation_spin.setDecimals(3)
+        self.activation_spin.setRange(0.0, 30.0)
+        self.activation_spin.setSingleStep(0.05)
+        self.activation_spin.setValue(float(self.settings.get("activation_delay", 1.0)))
+        settle_form.addRow(_labeled("Activation delay", "activation_delay"), self.activation_spin)
 
-        # --- PID Gains ---
-        self.pid_group = QGroupBox("PID Gains")
-        pid_layout = QFormLayout()
-        pid_config = self.settings.get("pid", {})
+        self.setpoint_settle_spin = QDoubleSpinBox()
+        self.setpoint_settle_spin.setDecimals(3)
+        self.setpoint_settle_spin.setRange(0.0, 30.0)
+        self.setpoint_settle_spin.setSingleStep(0.05)
+        self.setpoint_settle_spin.setValue(float(self.settings.get("setpoint_settle", 0.5)))
+        settle_form.addRow(_labeled("Setpoint settle", "setpoint_settle"), self.setpoint_settle_spin)
 
-        self.kp_spin = QDoubleSpinBox()
-        self.kp_spin.setRange(0.0, 10.0)
-        self.kp_spin.setDecimals(4)
-        self.kp_spin.setSingleStep(0.001)
-        self.kp_spin.setValue(pid_config.get("kp", 0.02))
-        pid_layout.addRow("Kp:", self.kp_spin)
+        settle_group.setLayout(settle_form)
+        layout.addWidget(settle_group)
 
-        self.ki_spin = QDoubleSpinBox()
-        self.ki_spin.setRange(0.0, 10.0)
-        self.ki_spin.setDecimals(4)
-        self.ki_spin.setSingleStep(0.001)
-        self.ki_spin.setValue(pid_config.get("ki", 0.005))
-        pid_layout.addRow("Ki:", self.ki_spin)
-
-        self.kd_spin = QDoubleSpinBox()
-        self.kd_spin.setRange(0.0, 10.0)
-        self.kd_spin.setDecimals(4)
-        self.kd_spin.setSingleStep(0.001)
-        self.kd_spin.setValue(pid_config.get("kd", 0.0))
-        pid_layout.addRow("Kd:", self.kd_spin)
-
-        self.d_filter_spin = QDoubleSpinBox()
-        self.d_filter_spin.setRange(0.01, 1.0)
-        self.d_filter_spin.setDecimals(3)
-        self.d_filter_spin.setSingleStep(0.01)
-        self.d_filter_spin.setValue(pid_config.get("d_filter_coeff", 0.1))
-        pid_layout.addRow("D Filter Coeff:", self.d_filter_spin)
-
-        self.pid_group.setLayout(pid_layout)
-        self.layout.addWidget(self.pid_group)
-
-        # --- Bang-Bang Steps ---
-        self.bangbang_group = QGroupBox("Bang-Bang Steps")
-        bb_layout = QFormLayout()
-
-        self.fine_step_spin = QDoubleSpinBox()
-        self.fine_step_spin.setRange(0.00001, 1.0)
-        self.fine_step_spin.setDecimals(5)
-        self.fine_step_spin.setValue(self.settings.get("step_fine", 0.0001))
-        bb_layout.addRow("Fine Step (V):", self.fine_step_spin)
-
-        self.coarse_step_spin = QDoubleSpinBox()
-        self.coarse_step_spin.setRange(0.001, 10.0)
-        self.coarse_step_spin.setDecimals(3)
-        self.coarse_step_spin.setValue(self.settings.get("step_coarse", 0.05))
-        bb_layout.addRow("Coarse Step (V):", self.coarse_step_spin)
-
-        self.bangbang_group.setLayout(bb_layout)
-        self.layout.addWidget(self.bangbang_group)
+        # --- Mode ---
+        self.continuous_check = QCheckBox()
+        self.continuous_check.setChecked(bool(self.settings.get("continuous", False)))
+        cont_form = QFormLayout()
+        cont_form.addRow(_labeled("Continuous hold", "continuous"), self.continuous_check)
+        layout.addLayout(cont_form)
 
         # Buttons
-        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        self.layout.addWidget(self.buttons)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
-        # Set initial visibility
-        self._on_mode_changed(self.mode_combo.currentIndex())
-
-    def _on_mode_changed(self, index):
-        is_pid = index == 0
-        self.pid_group.setVisible(is_pid)
-        self.bangbang_group.setVisible(not is_pid)
-
-    def get_settings(self):
-        mode = "pid" if self.mode_combo.currentIndex() == 0 else "bangbang"
+    def get_settings(self) -> dict:
         return {
-            "controller_mode": mode,
             "tolerance": self.tolerance_spin.value(),
+            "goto_threshold": self.goto_threshold_spin.value(),
             "poll_interval": self.poll_spin.value(),
             "required_stable_samples": self.stable_samples_spin.value(),
             "wavechannel": self.channel_spin.value(),
-            "voltage_min": self.voltage_min_spin.value(),
-            "voltage_max": self.voltage_max_spin.value(),
-            "step_fine": self.fine_step_spin.value(),
-            "step_coarse": self.coarse_step_spin.value(),
-            "pid": {
-                "kp": self.kp_spin.value(),
-                "ki": self.ki_spin.value(),
-                "kd": self.kd_spin.value(),
-                "d_filter_coeff": self.d_filter_spin.value(),
-            }
+            "wm_averaging_samples": self.wm_avg_spin.value(),
+            "dialog_open_delay": self.dialog_open_spin.value(),
+            "activation_delay": self.activation_spin.value(),
+            "setpoint_settle": self.setpoint_settle_spin.value(),
+            "continuous": self.continuous_check.isChecked(),
         }

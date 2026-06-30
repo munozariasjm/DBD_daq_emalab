@@ -10,14 +10,14 @@ import json
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
 
-from src.simulation.hardware_mocks import MockPIGCSDevice, MockEpicsClient
+from src.simulation.hardware_mocks import MockMatisseDevice, MockEpicsClient
 from src.control.laser_controller import LaserController
 from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
 
 # Real Hardware Imports
 from src.devices.tagger import Tagger
-from src.devices.laser import PIGCSDevice, ComClient
+from src.devices.laser import MatisseDevice, ComClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
 class DAQSystem:
@@ -30,41 +30,44 @@ class DAQSystem:
         epics_sim_settings = sim_config.get("epics", {})
         control_config = self.config.get("control_settings", {})
         laser_control_settings = control_config.get("laser", {})
-        self.wavechannel = int(laser_control_settings.get("wavechannel", 3))
+        self.wavechannel = int(laser_control_settings.get("wavechannel", 1))
 
-        simulation_mode = self.config.get("simulation_mode", True)
+        # Safe-by-default: a missing `simulation_mode` key means real
+        # hardware. The opposite default (True) silently puts the rig into
+        # simulation on a fresh install or after a typo, which has caused
+        # confusion before. Flag the absence loudly so the operator knows.
+        if "simulation_mode" not in self.config:
+            print("[DAQ] WARNING: 'simulation_mode' key missing from settings.json — "
+                  "defaulting to REAL HARDWARE. Add the key explicitly to silence this.")
+        simulation_mode = bool(self.config.get("simulation_mode", False))
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
 
         if simulation_mode: # Simulation Mode
             self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
 
-            self.pi_device = MockPIGCSDevice("Simulated_PI", initialization_params=laser_sim_settings)
+            merged_sim_params = dict(laser_sim_settings)
+            merged_sim_params.update(epics_sim_settings)
+            self.matisse_device = MockMatisseDevice(initialization_params=merged_sim_params)
 
-            self.epics_client = MockEpicsClient(self.pi_device, initialization_params=epics_sim_settings)
+            self.epics_client = MockEpicsClient(self.matisse_device, initialization_params=epics_sim_settings)
 
             self.multimeter = MockMultimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
             self.spec_reader = MockSpectrometreReader()
             self.wave_reader = MockWavenumberReader(source=None)
 
         else: # Real Hardware
-            print("Using real ")
+            print("Using real hardware")
             self.tagger = Tagger(index=0)
 
-            self.pi_device = PIGCSDevice("PI")
-            self.epics_client = ComClient(self.pi_device, initialization_params=epics_sim_settings)
+            self.matisse_device = MatisseDevice("Matisse")
+            self.epics_client = ComClient(self.matisse_device, initialization_params=epics_sim_settings)
 
             self.hp_multimeter = HP_Multimeter(port="COM16")
             self.multimeter = VoltageReader(self.hp_multimeter)
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
 
-        if hasattr(self.pi_device, 'SVO'):
-             try:
-                 self.pi_device.SVO(1, True)
-             except Exception as e:
-                 print(f"[DAQ] Warning: Failed to enable Servo: {e}")
-
-        self.laser = LaserController(self.pi_device, self.epics_client, config=laser_control_settings)
+        self.laser = LaserController(self.matisse_device, self.epics_client, config=laser_control_settings)
 
         if simulation_mode:
             self.wave_reader.source = self.laser
@@ -81,6 +84,13 @@ class DAQSystem:
         self.pending_events_count = 0
         self.pending_bunches_count = 0
         self.rate_lock = threading.Lock()
+        # First get_instant_rate() call after start() covers the entire
+        # window between tagger.start_reading() and the first GUI poll —
+        # many seconds of backlog. The events/bunches ratio is real but it's
+        # plotted as a single point at t=0, which looks like a spike. Tare
+        # the first sample to 0 so the rate plot only shows GUI-refresh-
+        # window rates.
+        self._rate_primed = False
 
         self.cached_voltage = 0.0
         self.cached_wavenumbers = [0.0] * 4
@@ -95,6 +105,11 @@ class DAQSystem:
         print("[DAQ] Starting system...")
         self.running = True
         self.tof_buffer = deque(maxlen=50000)
+        # Reset the tare so a stop/start cycle re-primes the rate plot.
+        with self.rate_lock:
+            self.pending_events_count = 0
+            self.pending_bunches_count = 0
+        self._rate_primed = False
 
         self.spec_reader.start()
         self.multimeter.start()
@@ -217,6 +232,10 @@ class DAQSystem:
                                 'voltage': current_voltage,
                                 'spectrum_peak': current_spec,
                                 'wavemeter_wn': current_wns[int(self.wavechannel-1)],
+                                'wavemeter_wn1': current_wns[0],
+                                'wavemeter_wn2': current_wns[1],
+                                'wavemeter_wn3': current_wns[2],
+                                'wavemeter_wn4': current_wns[3],
                                 'laser_target_wn': self.scanner.current_wavenumber,
                                 'scan_bin_index': self.scanner.current_bin_index,
                                 'bunch_id': entry[0] # Global ID from tagger
@@ -240,6 +259,10 @@ class DAQSystem:
                         'voltage': current_voltage,
                         'spectrum_peak': current_spec,
                         'wavemeter_wn': current_wns[int(self.wavechannel-1)], # Native cm^-1
+                        'wavemeter_wn1': current_wns[0],
+                        'wavemeter_wn2': current_wns[1],
+                        'wavemeter_wn3': current_wns[2],
+                        'wavemeter_wn4': current_wns[3],
                         'laser_target_wn': self.scanner.current_wavenumber,
                         'scan_bin_index': self.scanner.current_bin_index,
                         'bunch_id': entry[0] # Global ID from tagger
@@ -275,6 +298,13 @@ class DAQSystem:
     def get_instant_rate(self):
         """
         Returns the event rate in Events Per Bunch, averaged since the last call.
+
+        The first call after start() is discarded (returns 0): it would cover
+        the multi-second window between tagger.start_reading() and the first
+        GUI poll, which gets plotted as a single point at t=0 and looks like
+        a spike (e.g. ~100 epb on a beam with high event multiplicity).
+        Subsequent calls cover the GUI refresh interval (~100 ms) and reflect
+        the current rate accurately.
         """
         with self.rate_lock:
              events = self.pending_events_count
@@ -282,6 +312,10 @@ class DAQSystem:
 
              self.pending_events_count = 0
              self.pending_bunches_count = 0
+
+        if not self._rate_primed:
+            self._rate_primed = True
+            return 0.0
 
         if bunches > 0:
             return events / bunches

@@ -28,8 +28,11 @@ class SettingsManager:
                 "mean_events_per_bunch": 200.0
             },
             "laser": {
-                "move_speed": 10.0,
-                "noise_level": 0.001
+                "slew_rate": 50.0,
+                "noise_level": 1e-6
+            },
+            "epics": {
+                "noise_level": 1e-6
             },
             "multimeter": {
                 "noise_level": 0.05
@@ -37,23 +40,21 @@ class SettingsManager:
         },
         "control_settings": {
             "laser": {
-                "controller_mode": "pid",
-                "tolerance": 0.007,
-                "poll_interval": 0.01,
+                "tolerance": 1e-5,
+                "poll_interval": 0.5,
                 "required_stable_samples": 4,
                 "wavechannel": 1,
-                "voltage_min": 0.0,
-                "voltage_max": 5.0,
-                "step_fine": 0.001,
-                "step_coarse": 0.005,
-                "pid": {
-                    "kp": 0.02,
-                    "ki": 0.005,
-                    "kd": 0.0,
-                    "d_filter_coeff": 0.1
-                }
+                "wm_averaging_samples": 5,
+                "goto_threshold": 0.01,
+                "dialog_open_delay": 0.3,
+                "activation_delay": 1.0,
+                "setpoint_settle": 0.5,
+                "continuous": False
             }
-        }
+        },
+        # Safe-by-default. A fresh settings.json gets real hardware; the
+        # operator has to flip this to true explicitly to use simulation.
+        "simulation_mode": False
     }
 
     def __init__(self, config_path: str = "settings.json"):
@@ -70,11 +71,17 @@ class SettingsManager:
             with open(self.config_path, 'r') as f:
                 user_settings = json.load(f)
 
-            # Merge with defaults to ensure all keys exist
-            # This is a shallow merge for sections
+            # Shallow merge with defaults. Top-level values are usually dicts
+            # (the section blocks), but a few are scalars (e.g. simulation_mode).
+            # Only attempt dict.update() when BOTH sides are dicts; otherwise
+            # the user's value overrides outright.
             merged = self.DEFAULT_SETTINGS.copy()
             for section, values in user_settings.items():
-                if section in merged:
+                if (
+                    section in merged
+                    and isinstance(merged[section], dict)
+                    and isinstance(values, dict)
+                ):
                     merged[section].update(values)
                 else:
                     merged[section] = values

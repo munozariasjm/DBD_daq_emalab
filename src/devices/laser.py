@@ -1,111 +1,237 @@
+"""Client-side handles to the LASERLABCOMPUTER laser server and the EPICS
+wavemeter PVs. The Matisse is reached over XML-RPC; EPICS is reached
+directly.
+
+Every XML-RPC call goes through `_call`, which prints a clearly formatted
+banner on the DAQ terminal whenever the server is unreachable, hung, or
+returning XML-RPC faults. Repeated failures are deduplicated to one short
+"still unreachable" line so the log isn't flooded; the next successful call
+prints a "server reachable again" notice so a recovery is also visible.
+"""
+
+import os
+import socket
 import xmlrpc.client
 from threading import Lock
+
 try:
     import epics
 except ImportError:
     print("[HW] Warning: epics module not found.")
     epics = None
 
-import os
 
-LAB_COMPUTER_IP = "10.54.6.1"#os.environ.get('LASER_SERVER_HOST', '10.54.6.139:0.0.0.0')
-LAB_COMPUTER_PORT = "8000"#int(os.environ.get('LASER_SERVER_PORT', 8000))
+LAB_COMPUTER_IP = "10.54.6.1"
+LAB_COMPUTER_PORT = "8000"
 
-if os.environ.get('SIMULATION', '0') == '1':
-    LAB_COMPUTER_IP = 'localhost'
-import threading
-import xmlrpc.client
+if os.environ.get("SIMULATION", "0") == "1":
+    LAB_COMPUTER_IP = "localhost"
 
-class PIGCSDevice:
-    def __init__(self, controller_name='', initialization_params: dict = {}):
+
+# Exception types that mean "the laser server is unreachable / unresponsive".
+_NETWORK_ERRORS = (
+    xmlrpc.client.Fault,
+    xmlrpc.client.ProtocolError,
+    ConnectionRefusedError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    socket.timeout,
+    socket.gaierror,
+    OSError,
+)
+
+
+class MatisseDevice:
+    """Thin XML-RPC proxy mirroring the LaserServerInterface methods."""
+
+    def __init__(self, controller_name: str = "", initialization_params: dict = {}):
         self.url = f"http://{LAB_COMPUTER_IP}:{LAB_COMPUTER_PORT}"
         self.lock = Lock()
-
         self.proxy = xmlrpc.client.ServerProxy(
             self.url,
             allow_none=True,
-            use_builtin_types=True
+            use_builtin_types=True,
         )
-        print(f"[RemoteHW] Connected to persistent server proxy at {self.url}")
+        # None = unknown, True = last call OK, False = last call failed.
+        # Used to dedupe noisy outage logs.
+        self._healthy = None
+        # Will be set to True/False by _ping_on_startup if the server
+        # supports is_simulation(); None means we couldn't ask.
+        self._server_simulation = None
+        # Whether the DAQ wants real hardware. Real-mode client + sim-mode
+        # server = Frankenstein data; we refuse to operate in that case.
+        self._daq_wants_real = (os.environ.get("SIMULATION", "0") != "1")
+        print(f"[Matisse] Connecting to laser server at {self.url} ...")
+        self._ping_on_startup()
 
-    def MOV(self, axis, target):
-        with self.lock:
-             return self.proxy.MOV(axis, float(target))
+    # ---- Connectivity ----
 
-    def qPOS(self, axis=None):
-        with self.lock:
-            val = self.proxy.qPOS(axis)
-        return {axis: val} if axis else {1: val}
+    def _ping_on_startup(self):
+        # Step 1: TCP-level reachability. Succeeds fast if anything is
+        # listening on host:port, fails fast (ConnectionRefused / EHOSTUNREACH
+        # / DNS error) otherwise. Independent of which XML-RPC methods the
+        # deployed server exposes.
+        host = LAB_COMPUTER_IP
+        try:
+            port = int(LAB_COMPUTER_PORT)
+        except (TypeError, ValueError):
+            port = 8000
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                pass
+        except _NETWORK_ERRORS as e:
+            self._log_outage("tcp_connect", (host, port), e)
+            self._healthy = False
+            return
 
-    def waitontarget(self, axis):
-        with self.lock:
-            return self.proxy.ServerWaitOnTarget(axis)
+        # Step 2: server is reachable. Try the new ping() for a hardware-side
+        # health check. If the deployed server is older and doesn't implement
+        # ping(), it returns an XML-RPC Fault (NOT a network error) — treat
+        # that as "reachable, older API" rather than an outage.
+        try:
+            with self.lock:
+                ok = bool(self.proxy.ping())
+        except xmlrpc.client.Fault:
+            print(
+                f"[Matisse] Server reachable at {self.url} (older API: no ping). "
+                "Hardware health will only surface on first real command."
+            )
+            self._healthy = True
+            return
+        except _NETWORK_ERRORS as e:
+            self._log_outage("ping", (), e)
+            self._healthy = False
+            return
 
-    def SVO(self, axis, state):
-        pass
+        if ok:
+            print(f"[Matisse] Server ping OK at {self.url}")
+            self._healthy = True
+            # Check whether the server is in simulation mode. Mismatch
+            # between client and server is a serious bug — it produces
+            # Frankenstein data (real tagger events against a mock laser).
+            self._check_sim_mode()
+            return
+        else:
+            # Server is up but its Matisse handle is None — the laser itself
+            # is not initialised. The DAQ can still boot; the operator needs
+            # to restart Matisse Commander / the server.
+            print("[Matisse] =========== LASER SERVER WARNING ===========")
+            print(f"[Matisse] Server at {self.url} is reachable but reports")
+            print("[Matisse] that the Matisse handle is NOT initialised.")
+            print("[Matisse] Restart laser_server.py with Matisse Commander")
+            print("[Matisse] running and the USB device available.")
+            print("[Matisse] ============================================")
+            self._healthy = False
 
-# class PIGCSDevice:
-#     """
-#     Robust Remote Client. Connects to laser_server.py.
-#     """
-#     def __init__(self, controller_name='', initialization_params: dict = {}):
-#         self.lock = Lock()
-#         self.url = f"http://{LAB_COMPUTER_IP}:{LAB_COMPUTER_PORT}"
+    def is_healthy(self) -> bool:
+        return self._healthy is True
 
-#         transport = xmlrpc.client.Transport()
-#         self.proxy = xmlrpc.client.ServerProxy(self.url, transport=transport, allow_none=False)
+    def _check_sim_mode(self):
+        """Detect server-side simulation mode and shout if the DAQ wants
+        real hardware but the server is in sim — that combination silently
+        produces real-tagger-vs-mock-laser Frankenstein data."""
+        try:
+            with self.lock:
+                server_is_sim = bool(self.proxy.is_simulation())
+        except xmlrpc.client.Fault:
+            # Older server build without is_simulation(); we can't tell.
+            return
+        except _NETWORK_ERRORS:
+            return
+        self._server_simulation = server_is_sim
+        if server_is_sim and self._daq_wants_real:
+            print("[Matisse] ========== SIMULATION MODE MISMATCH ==========")
+            print(f"[Matisse] Server at {self.url} is running in SIMULATION mode")
+            print("[Matisse] (laser_server.py was launched with SIMULATION=1) but")
+            print("[Matisse] this DAQ has simulation_mode=False, expecting REAL")
+            print("[Matisse] hardware. Every laser command goes to a MOCK laser")
+            print("[Matisse] while the tagger and wavemeter are real — recorded")
+            print("[Matisse] data will be Frankenstein.")
+            print("[Matisse] Fix on the laser-lab machine:")
+            print("[Matisse]   Remove-Item Env:SIMULATION    (PowerShell)")
+            print("[Matisse]   or just open a fresh terminal, then")
+            print("[Matisse]   python LASERLABCOMPUTER/laser_server.py")
+            print("[Matisse] ===============================================")
+            self._healthy = False
+        elif server_is_sim:
+            print("[Matisse] Server is in SIMULATION mode (matches DAQ config).")
 
-#         print(f"[RemoteHW] Connected to Server at {self.url}")
-#         self.connected = True
+    # ---- Internal call wrapper ----
 
-#     def __enter__(self):
-#         return self
+    def _call(self, method: str, *args):
+        """Invoke `method` on the server proxy with logging on failure.
 
-#     def __exit__(self, exc_type, exc_val, exc_tb):
-#         pass
+        On any network/XML-RPC error, prints a banner on first occurrence
+        (subsequent identical failures get one short line) and re-raises so
+        the controller's per-call exception handler can react. On recovery,
+        prints a "reachable again" message exactly once per outage."""
+        try:
+            with self.lock:
+                result = getattr(self.proxy, method)(*args)
+        except _NETWORK_ERRORS as e:
+            self._log_outage(method, args, e)
+            self._healthy = False
+            raise
+        if self._healthy is False:
+            print(f"[Matisse] Server reachable again at {self.url}")
+        self._healthy = True
+        return result
 
-#     def ConnectRS232(self, comport, baudrate):
-#         print(f"[RemoteHW] (Server is handling RS232 connection on COM{comport})")
+    def _log_outage(self, method, args, err):
+        if self._healthy is False:
+            print(
+                f"[Matisse] {method}{tuple(args)}: still unreachable "
+                f"({type(err).__name__}: {err})"
+            )
+            return
+        print("[Matisse] =============== LASER SERVER ERROR ===============")
+        print(f"[Matisse] URL    : {self.url}")
+        print(f"[Matisse] Call   : {method}{tuple(args)}")
+        print(f"[Matisse] Error  : {type(err).__name__}: {err}")
+        print("[Matisse] Hint   : check that LASERLABCOMPUTER/laser_server.py")
+        print(f"[Matisse]          is running and that {self.url} is reachable.")
+        print("[Matisse] ==================================================")
 
-#     def call_proxy(self, func_name, *args):
-#             with self.lock:
-#                 func = getattr(self.proxy, func_name)
-#                 return func(*args)
+    # ---- CounterDrift ----
 
-#     def MOV(self, axis, target):
-#         with self.lock:
-#             self.proxy.MOV(axis, float(target))
+    def cd_open(self) -> bool:
+        return bool(self._call("cd_open"))
 
-#     def qPOS(self, axis=None):
-#         """
-#         Returns dictionary {axis: value} to match pipython behavior.
-#         """
-#         with self.lock:
-#             val = self.proxy.qPOS(axis)
-#             return {axis: val} if axis else {1: val}
+    def cd_setpoint(self, nm: float) -> bool:
+        return bool(self._call("cd_setpoint", float(nm)))
 
-#     def qVEL(self, axis):
-#         return {axis: 0.0}
+    def cd_activate(self, state: bool) -> bool:
+        return bool(self._call("cd_activate", bool(state)))
 
-#     def waitontarget(self, axis):
-#         """
-#         Blocks until the Server reports the axis has stopped moving.
-#         Replaces 'pitools.waitontarget'.
-#         """
-#         with self.lock:
-#             self.proxy.ServerWaitOnTarget(axis)
+    def cd_get_wavelength(self) -> float:
+        return float(self._call("cd_get_wavelength"))
+
+    # ---- GoTo ----
+
+    def goto_open(self) -> bool:
+        return bool(self._call("goto_open"))
+
+    def goto_set(self, nm: float) -> bool:
+        return bool(self._call("goto_set", float(nm)))
+
+    def goto_start(self) -> bool:
+        return bool(self._call("goto_start"))
+
+    def goto_status(self) -> str:
+        return str(self._call("goto_status"))
 
 
 class ComClient:
-    def __init__(self, pi_device, **kwargs):
-        self.pi = pi_device # This is the PIGCSDevice instance
+    """Thin wrapper around epics.caget so the controller has one indirection
+    point for wavemeter reads. Kept for compatibility with the existing
+    daq_system.py wiring."""
 
-    def caget(self, pvname):
+    def __init__(self, matisse_device, **kwargs):
+        self.matisse = matisse_device
+
+    def caget(self, pvname: str):
         try:
-            # This now uses the thread-local proxy property
-            # return self.pi.proxy.get_epics_wn(pvname)
             return epics.caget(pvname)
         except Exception as e:
-            # print(pvname)
             print(f"[EPICS Client Error] {e}")
             return 0.0

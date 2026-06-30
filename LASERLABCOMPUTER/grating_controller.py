@@ -4,8 +4,8 @@ import threading
 import time
 from xmlrpc.server import SimpleXMLRPCServer
 from socketserver import ThreadingMixIn
-import pylablib as pll
-pll.list_backend_resources("visa")
+from pylablib.devices import Sirah
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 SIMULATION = os.environ.get('SIMULATION', '0') == '1'
@@ -36,21 +36,24 @@ class ThreadedXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
 class LaserServerInterface:
     def __init__(self):
         self.lock = threading.Lock()
-        print(f"[Server] Initializing {CONTROLLERNAME}...")
-        if SIMULATION:
-            self.pi = get_mock_device()
-            self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
-            self.pi.SVO(1, 1)
-            return
-
+        self.laser = True
         try:
-            self.pi = GCSDevice(CONTROLLERNAME)
-            self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
-            print(f"[Server] Connected: {self.pi.qIDN().strip()}")
+            print(f"[Server] Initializing {CONTROLLERNAME}...")
+            if SIMULATION:
+                self.pi = get_mock_device()
+                self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
+                self.pi.SVO(1, 1)
+                return
+            elif self.laser:
+                self.pi = GCSDevice(CONTROLLERNAME)
+                self.pi.ConnectRS232(comport=COM_PORT, baudrate=BAUD_RATE)
+                print(f"[Server] Connected: {self.pi.qIDN().strip()}")
 
-            self.pi.SVO(1, 1)
-            print("[Server] Servo enabled (Axis 1).")
-            print(self.pi.qPOS(1)[1])
+                self.pi.SVO(1, 1)
+                print("[Server] Servo enabled (Axis 1).")
+                print(self.pi.qPOS(1)[1])
+            else:
+                self.sirah = Sirah.SirahMatisse("USB0::0x17E7::0x0102::24-50-09::INSTR")
         except Exception as e:
             print(f"[Server] CRITICAL HARDWARE ERROR: {e}")
             self.pi = None
@@ -59,8 +62,12 @@ class LaserServerInterface:
         print(f"[CMD] MOV Axis {axis} -> {target}")
         try:
             with self.lock:
-                self.pi.MOV(axis, float(target))
-                time.sleep(0.1) # Critical: Small pause
+                if self.laser:
+                    self.pi.MOV(axis, float(target))
+                    time.sleep(0.5) # Critical: Small pause
+                else:
+                    print()
+                    self.sirah.ask(f'SCAN:NOW {float(target)}')
             return True
         except Exception as e:
             print(f"Hardware Error in MOV: {e}")
@@ -69,15 +76,21 @@ class LaserServerInterface:
     def qPOS(self, axis):
         try:
             with self.lock:
-                val = self.pi.qPOS(axis)[axis]
-                time.sleep(0.1) # Critical: Small pause after serial talk
-            return float(val)
+                if self.laser:
+                    val = self.pi.qPOS(axis)[axis]
+                    time.sleep(0.5) # Critical: Small pause after serial talk
+                else:
+                    val = self.sirah.ask(f'SCAN:NOW?')
+            return float(val)   
         except Exception as e:
             print(f"Hardware Error in qPOS: {e}")
             return 0.0
 
     def close(self):
-        self.pi.CloseConnection()
+        if self.laser:
+            self.pi.CloseConnection()
+        else:
+            self.sirah.close()
 
 if __name__ == "__main__":
     import time

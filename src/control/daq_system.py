@@ -10,14 +10,15 @@ import json
 from src.simulation.sim_tagger import MockTagger
 from src.simulation.sim_sensors import MockMultimeter, MockSpectrometreReader, MockWavenumberReader
 
-from src.simulation.hardware_mocks import MockMatisseDevice, MockEpicsClient
+from src.simulation.hardware_mocks import MockMatisseDevice, MockGratingDevice, MockEpicsClient
 from src.control.laser_controller import LaserController
+from src.control.grating_controller import GratingController
 from src.control.data_saver import DataSaver
 from src.control.scanner import Scanner
 
 # Real Hardware Imports
 from src.devices.tagger import Tagger
-from src.devices.laser import MatisseDevice, ComClient
+from src.devices.laser import MatisseDevice, GratingDevice, ComClient
 from src.devices.sensors import HP_Multimeter, SpectrometreReader, WavenumberReader, VoltageReader
 
 class DAQSystem:
@@ -27,10 +28,41 @@ class DAQSystem:
 
         # Configuration extraction
         laser_sim_settings = sim_config.get("laser", {})
+        grating_sim_settings = sim_config.get("grating", {})
         epics_sim_settings = sim_config.get("epics", {})
         control_config = self.config.get("control_settings", {})
         laser_control_settings = control_config.get("laser", {})
-        self.wavechannel = int(laser_control_settings.get("wavechannel", 1))
+        grating_control_settings = control_config.get("grating", {})
+        # Which laser the laser-lab machine is serving on port 8000:
+        #   "matisse" -> matisse_cd_controller.py (CounterDrift firmware lock)
+        #   "grating" -> grating_controller.py     (PI stage + software servo)
+        # Set to match whichever server is running; the two are never up at once.
+        # One table maps the laser to its client/controller classes and config
+        # block, so device + controller construction below is a single lookup
+        # rather than if/else on laser_type scattered across the constructor.
+        self.laser_type = str(control_config.get("laser_type", "matisse")).lower()
+        laser_wiring = {
+            "matisse": {
+                "control": laser_control_settings,
+                "sim_params": laser_sim_settings,
+                "sim_device": MockMatisseDevice,
+                "real_device": lambda: MatisseDevice("Matisse"),
+                "controller": LaserController,
+            },
+            "grating": {
+                "control": grating_control_settings,
+                "sim_params": grating_sim_settings,
+                "sim_device": MockGratingDevice,
+                "real_device": lambda: GratingDevice(
+                    "Grating",
+                    initialization_params={"axis": int(grating_control_settings.get("axis", 1))},
+                ),
+                "controller": GratingController,
+            },
+        }
+        self._wiring = laser_wiring.get(self.laser_type, laser_wiring["matisse"])
+        active_control_settings = self._wiring["control"]
+        self.wavechannel = int(active_control_settings.get("wavechannel", 1))
 
         # Safe-by-default: a missing `simulation_mode` key means real
         # hardware. The opposite default (True) silently puts the rig into
@@ -41,15 +73,16 @@ class DAQSystem:
                   "defaulting to REAL HARDWARE. Add the key explicitly to silence this.")
         simulation_mode = bool(self.config.get("simulation_mode", False))
         print(f"[DAQ] System Model: {'SIMULATION' if simulation_mode else 'REAL HARDWARE'}")
+        print(f"[DAQ] Laser: {self.laser_type.upper()}")
 
         if simulation_mode: # Simulation Mode
             self.tagger = MockTagger(initialization_params=sim_config.get("tagger", {}))
 
-            merged_sim_params = dict(laser_sim_settings)
+            merged_sim_params = dict(self._wiring["sim_params"])
             merged_sim_params.update(epics_sim_settings)
-            self.matisse_device = MockMatisseDevice(initialization_params=merged_sim_params)
+            self.laser_device = self._wiring["sim_device"](initialization_params=merged_sim_params)
 
-            self.epics_client = MockEpicsClient(self.matisse_device, initialization_params=epics_sim_settings)
+            self.epics_client = MockEpicsClient(self.laser_device, initialization_params=epics_sim_settings)
 
             self.multimeter = MockMultimeter("COM1", initialization_params=sim_config.get("multimeter", {}))
             self.spec_reader = MockSpectrometreReader()
@@ -59,15 +92,17 @@ class DAQSystem:
             print("Using real hardware")
             self.tagger = Tagger(index=0)
 
-            self.matisse_device = MatisseDevice("Matisse")
-            self.epics_client = ComClient(self.matisse_device, initialization_params=epics_sim_settings)
+            self.laser_device = self._wiring["real_device"]()
+            self.epics_client = ComClient(self.laser_device, initialization_params=epics_sim_settings)
 
             self.hp_multimeter = HP_Multimeter(port="COM16")
             self.multimeter = VoltageReader(self.hp_multimeter)
             self.spec_reader = SpectrometreReader()
             self.wave_reader = WavenumberReader()
 
-        self.laser = LaserController(self.matisse_device, self.epics_client, config=laser_control_settings)
+        self.laser = self._wiring["controller"](
+            self.laser_device, self.epics_client, config=active_control_settings
+        )
 
         if simulation_mode:
             self.wave_reader.source = self.laser

@@ -1,11 +1,11 @@
 {
     "scan_settings": {
-        "start_wn": 12625.18,
-        "end_wn": 12625.2,
+        "start_wn": 12628.95,
+        "end_wn": 12628.91,
         "step_size": 0.001,
         "stop_mode": "time",
-        "stop_val": 2.0,
-        "loops": 2,
+        "stop_val": 250.0,
+        "loops": 1,
         "min_wn": 12625.18,
         "max_wn": 12625.21
     },
@@ -39,26 +39,16 @@
     },
     "control_settings": {
         "laser": {
-            "pid_enabled": false,
-            "controller_mode": "pid",
-            "tolerance": 0.0003,
-            "poll_interval": 0.5,
+            "tolerance": 0.0005,
+            "goto_threshold": 0.01,
+            "poll_interval": 0.2,
             "required_stable_samples": 4,
             "wavechannel": 1,
-            "voltage_min": 0.0,
-            "voltage_max": 0.7,
-            "step_fine": 0.001,
-            "step_coarse": 0.005,
-            "counterdrift_mode": false,
-            "auto_reset_enabled": false,
-            "auto_reset_target": 0.35,
             "wm_averaging_samples": 5,
-            "pid": {
-                "kp": -0.0001,
-                "ki": 0.0,
-                "kd": 0.0,
-                "d_filter_coeff": 0.01
-            }
+            "dialog_open_delay": 0.3,
+            "activation_delay": 1.0,
+            "setpoint_settle": 0.5,
+            "continuous": false
         }
     },
     "simulation_mode": false

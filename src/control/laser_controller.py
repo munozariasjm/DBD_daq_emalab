@@ -33,6 +33,14 @@ class LaserController:
         self.poll_interval = float(self.config.get("poll_interval", 0.5))
         self.required_stable_samples = int(self.config.get("required_stable_samples", 4))
         self.goto_threshold = float(self.config.get("goto_threshold", 0.01))
+        # Runaway guard: after CD engages, a healthy lock converges toward
+        # tolerance. If the wavemeter sits more than runaway_limit cm^-1 from
+        # the target for runaway_samples consecutive polls, CounterDrift is
+        # driving the laser away (wrong CD Unit / inverted sign / dead feedback)
+        # and we disengage rather than let it run unbounded. runaway_limit is
+        # well above goto_threshold so a normal settle never trips it.
+        self.runaway_limit = float(self.config.get("runaway_limit", 0.05))
+        self.runaway_samples = int(self.config.get("runaway_samples", 3))
         self.dialog_open_delay = float(self.config.get("dialog_open_delay", 0.3))
         self.activation_delay = float(self.config.get("activation_delay", 1.0))
         self.setpoint_settle = float(self.config.get("setpoint_settle", 0.5))
@@ -46,6 +54,9 @@ class LaserController:
         self.target_wn = 0.0
         self.is_locked = False
         self._cd_active = False
+        # Latched True after a runaway abort so subsequent bins refuse to
+        # re-engage CounterDrift. Cleared only by restarting the controller.
+        self._aborted = False
         self._dialog_opened = False
         # Pre-flight unit check (Matisse Display Unit vs wavemeter). Verified
         # once per controller lifetime — operator is assumed not to flip the
@@ -130,6 +141,8 @@ class LaserController:
                 self.config.get("required_stable_samples", self.required_stable_samples)
             )
             self.goto_threshold = float(self.config.get("goto_threshold", self.goto_threshold))
+            self.runaway_limit = float(self.config.get("runaway_limit", self.runaway_limit))
+            self.runaway_samples = int(self.config.get("runaway_samples", self.runaway_samples))
             self.dialog_open_delay = float(self.config.get("dialog_open_delay", self.dialog_open_delay))
             self.activation_delay = float(self.config.get("activation_delay", self.activation_delay))
             self.setpoint_settle = float(self.config.get("setpoint_settle", self.setpoint_settle))
@@ -310,6 +323,28 @@ class LaserController:
         except Exception as e:
             print(f"[Laser] _engage failed: {e}")
 
+    def _handle_runaway(self, wn: float, target: float, delta: float):
+        """CounterDrift is driving the laser away from the setpoint. Disengage
+        immediately and latch `_aborted` so subsequent bins don't re-engage and
+        keep driving the laser off. Operator must fix the cause and restart."""
+        print("[Laser] ============== COUNTERDRIFT RUNAWAY ==============")
+        print(f"[Laser] Wavemeter {wn:.6f} cm^-1 is {delta:.4f} from target "
+              f"{target:.6f} and diverging (limit {self.runaway_limit} cm^-1).")
+        print("[Laser] Most likely the Matisse CounterDrift dialog Unit is NOT nm")
+        print("[Laser] (its readout must show ~792 nm, not ~12625 cm^-1), or the")
+        print("[Laser] feedback sign is inverted. Disengaging CounterDrift now.")
+        print("[Laser] Fix the CD Unit, then restart the DAQ.")
+        print("[Laser] ===================================================")
+        try:
+            self.matisse.cd_activate(False)
+        except Exception as e:
+            print(f"[Laser] cd_activate(False) during runaway abort failed: {e}")
+        self._cd_active = False
+        self._aborted = True
+        with self.lock:
+            self.is_locked = False
+        self.stop_event.set()
+
     # ---- Main control loop ----
 
     def _control_loop(self):
@@ -323,6 +358,11 @@ class LaserController:
                 print("[Laser] Pre-flight unit check FAILED — refusing to engage CounterDrift.")
                 return
             self._setup_verified = True
+
+        if self._aborted:
+            print("[Laser] ABORTED state from a prior CounterDrift runaway — not "
+                  "engaging. Fix the CD Unit (readout must be ~792 nm) and restart the DAQ.")
+            return
 
         # Outer aim/re-aim loop: each iteration positions and verifies a lock
         # for the current target. We come back here whenever set_wavenumber()
@@ -357,6 +397,7 @@ class LaserController:
             # LOCK ACQUIRED message has been emitted since the last LOCK LOST
             # — only print on transitions, not on every sample.
             stable_samples = 0
+            runaway_count = 0
             printed_locked = False
             while not self.stop_event.is_set():
                 if self._target_changed.is_set():
@@ -365,6 +406,15 @@ class LaserController:
                 with self.lock:
                     cur_target = self.target_wn
                 delta = abs(wn - cur_target)
+                # Runaway guard: diverging far past the capture range means CD is
+                # driving the laser off (e.g. wrong CD Unit). Abort, don't ride it.
+                if delta > self.runaway_limit:
+                    runaway_count += 1
+                    if runaway_count >= self.runaway_samples:
+                        self._handle_runaway(wn, cur_target, delta)
+                        return
+                else:
+                    runaway_count = 0
                 if delta < self.tolerance:
                     stable_samples += 1
                     if stable_samples >= self.required_stable_samples:

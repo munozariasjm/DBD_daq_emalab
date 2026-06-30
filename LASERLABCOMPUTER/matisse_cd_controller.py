@@ -1,33 +1,5 @@
-"""XML-RPC bridge to the Sirah Matisse via Matisse Commander's network
-server.
-
-Architecture: Matisse Commander (the desktop application that owns the
-laser) runs its own TCP server, configured under
-  Matisse > Communication Options > Network Server Settings
-Default address: 127.0.0.1:30000. That server understands the MCP commands
-documented in update_docs.pdf (pp. 14-20). The laser's DSP firmware over
-USB-VISA does NOT — it speaks low-level DSP commands and rejects every
-`MCP_WM_*` token with `1,"general syntax error"`. It also races Matisse
-Commander for the USB resource (`VI_ERROR_RSRC_LOCKED`).
-
-This server therefore opens a plain TCP socket to Matisse Commander and
-forwards MCP commands as ASCII lines. No `#SERVER ` prefix is sent: that
-prefix is the routing token for Matisse Commander's interactive Command
-Console, where it tells the console "send this to the server" — but when
-you're already connected to the server over TCP there is nothing to
-route.
-
-Operator-side requirement (in Matisse Commander):
-  - Display Options > Position Display Mode = nm
-  - CounterDrift dialog > Unit = nm
-  - Communication Options > Enable Server checked, port matches MATISSE_PORT
-The DAQ sends every setpoint in nm vacuum; if Commander's units are cm^-1
-the laser will be driven catastrophically off target.
-
-Config via env vars:
-  MATISSE_HOST   Matisse Commander network server host (default 127.0.0.1)
-  MATISSE_PORT   Matisse Commander network server port (default 30000)
-  SIMULATION     "1" to use the MockMatisseDevice in place of TCP
+"""
+FOR MATISSE'S COUNTERDRIFT
 """
 
 import functools

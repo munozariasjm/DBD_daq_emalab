@@ -29,10 +29,10 @@
             "noise_level": 0.001
         },
         "grating": {
-            "initial_wn": 12625.0,
-            "initial_pos": 0.0,
+            "initial_wn": 12625.2,
+            "initial_pos": 0.35,
             "wn_per_unit": -1.0,
-            "slew_rate": 50.0,
+            "slew_rate": 0.5,
             "noise_level": 0.001
         },
         "epics": {
@@ -60,20 +60,12 @@
         },
         "grating": {
             "axis": 1,
-            "wn_per_unit": -1.0,
-            "kp": 0.5,
-            "ki": 0.0,
-            "tolerance": 0.0005,
-            "poll_interval": 0.3,
+            "tolerance": 0.0001,
+            "step_fine": 0.0001,
+            "step_coarse": 0.001,
+            "poll_interval": 0.01,
             "required_stable_samples": 4,
-            "wavechannel": 1,
-            "wm_averaging_samples": 5,
-            "step_limit": 5.0,
-            "pos_min": -1000000.0,
-            "pos_max": 1000000.0,
-            "runaway_samples": 5,
-            "runaway_margin": 0.0001,
-            "continuous": true
+            "wavechannel": 1
         }
     },
     "simulation_mode": false

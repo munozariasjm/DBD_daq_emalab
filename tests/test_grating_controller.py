@@ -1,10 +1,11 @@
-"""Unit tests for the closed-loop GratingController.
+"""Unit tests for the GratingController (coarse/fine position-stepping "go_to").
 
 These run against the same simulation mocks the DAQ uses in grating mode
 (MockGratingDevice as the PI stage, MockEpicsClient as the wavemeter), so the
-servo is exercised end to end with no network or hardware. The mock's
-wavenumber tracks its stage position through a `wn_per_unit` calibration; the
-controller closes the loop on the (noisy) wavemeter read.
+search is exercised end to end with no network or hardware. The mock's
+wavenumber tracks its stage position through a negative slope (moving the stage
+up lowers the wavenumber), matching the real grating; the controller walks the
+position until the wavemeter sits on target.
 """
 
 import os
@@ -15,33 +16,28 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import pytest
 
-from src.control.grating_controller import GratingController, GratingPID
+from src.control.grating_controller import GratingController
 from src.simulation.hardware_mocks import MockGratingDevice, MockEpicsClient
 
 
-# Fast so tests don't crawl: instant stage slew, short polls, tiny lock count.
-def make_rig(controller_wn_per_unit=-1.0, mock_wn_per_unit=-1.0, **overrides):
+# Operating point: wn = 12625.2 + (pos - 0.35) * (-1.0).
+def make_rig(**overrides):
     device = MockGratingDevice(initialization_params={
-        "initial_wn": 12625.0,
-        "initial_pos": 0.0,
-        "wn_per_unit": mock_wn_per_unit,
+        "initial_wn": 12625.2,
+        "initial_pos": 0.35,
+        "wn_per_unit": -1.0,     # negative slope: +position -> -wavenumber
         "slew_rate": 100000.0,   # effectively instant settle
         "noise_level": 0.0,
     })
     epics = MockEpicsClient(device, initialization_params={"noise_level": 0.0})
     config = {
-        "axis": 1,
-        "wn_per_unit": controller_wn_per_unit,
-        "kp": 0.6,
-        "ki": 0.0,
-        "tolerance": 0.001,
-        "poll_interval": 0.005,
-        "required_stable_samples": 3,
-        "step_limit": 50.0,
-        "runaway_samples": 5,
-        "runaway_margin": 0.0001,
-        "wm_averaging_samples": 1,
-        "continuous": True,
+        # Faster/coarser than the real defaults so the sim search converges quickly.
+        "tolerance": 0.003,
+        "step_fine": 0.002,
+        "step_coarse": 0.02,
+        "poll_interval": 0.002,
+        "required_stable_samples": 2,
+        "wavechannel": 1,
     }
     config.update(overrides)
     ctrl = GratingController(device, epics, config=config)
@@ -57,39 +53,12 @@ def wait_until(predicate, timeout=8.0, interval=0.01):
     return predicate()
 
 
-# --------------------------------------------------------------------------
-# GratingPID math
-# --------------------------------------------------------------------------
-
-def test_pid_proportional_step_uses_calibration_sign():
-    # kp=0.5, wn_per_unit=-2 => step = 0.5 * error / (-2) = -0.25 * error
-    pid = GratingPID(kp=0.5, ki=0.0, wn_per_unit=-2.0, step_limit=1e9)
-    step = pid.compute(error=4.0, dt=0.1)
-    assert step == pytest.approx(0.5 * 4.0 / -2.0)
-
-
-def test_pid_step_limit_clamps():
-    pid = GratingPID(kp=1.0, ki=0.0, wn_per_unit=1.0, step_limit=2.0)
-    assert pid.compute(error=100.0, dt=0.1) == pytest.approx(2.0)
-    assert pid.compute(error=-100.0, dt=0.1) == pytest.approx(-2.0)
-
-
-def test_pid_zero_calibration_is_safe():
-    pid = GratingPID(kp=1.0, ki=0.0, wn_per_unit=0.0, step_limit=5.0)
-    assert pid.compute(error=4.0, dt=0.1) == 0.0
-
-
-# --------------------------------------------------------------------------
-# Closed-loop servo
-# --------------------------------------------------------------------------
-
 def test_servo_locks_on_target():
     ctrl, device, _ = make_rig()
-    target = 12628.0
+    target = 12625.25
     try:
         ctrl.set_wavenumber(target)
-        assert wait_until(lambda: ctrl.is_locked), "controller never reported a lock"
-        assert ctrl.is_stable(), "is_stable() false after lock"
+        assert wait_until(lambda: ctrl.is_stable()), "controller never reported stable"
         assert abs(ctrl.get_wavenumber() - target) < ctrl.tolerance
     finally:
         ctrl.stop()
@@ -98,48 +67,40 @@ def test_servo_locks_on_target():
 def test_servo_reaims_on_new_target():
     ctrl, device, _ = make_rig()
     try:
-        ctrl.set_wavenumber(12628.0)
-        assert wait_until(lambda: ctrl.is_locked)
-        # Re-aim without restarting the loop.
-        ctrl.set_wavenumber(12622.5)
-        assert wait_until(lambda: ctrl.is_locked and abs(ctrl.get_wavenumber() - 12622.5) < ctrl.tolerance)
+        ctrl.set_wavenumber(12625.25)
+        assert wait_until(lambda: ctrl.is_stable())
+        ctrl.set_wavenumber(12625.15)
+        assert wait_until(lambda: ctrl.is_stable() and abs(ctrl.get_wavenumber() - 12625.15) < ctrl.tolerance)
     finally:
         ctrl.stop()
 
 
-def test_wrong_sign_calibration_triggers_runaway_and_latches():
-    # Controller thinks +position raises wn, but the stage does the opposite:
-    # every correction makes the error worse -> runaway abort, latched.
-    ctrl, device, _ = make_rig(controller_wn_per_unit=+1.0, mock_wn_per_unit=-1.0)
+def test_steps_in_correct_direction_for_negative_slope():
+    # Target below the current wavenumber -> wavemeter is above target -> the
+    # controller must step the stage UP (negative slope brings wn down).
+    ctrl, device, _ = make_rig()
+    start_pos = device.qPOS()
     try:
-        ctrl.set_wavenumber(12630.0)
-        assert wait_until(lambda: ctrl._aborted), "runaway guard never latched on wrong-sign calibration"
-        assert not ctrl.is_locked
-        # Latched: a fresh target must NOT re-engage the servo.
-        ctrl.set_wavenumber(12626.0)
-        time.sleep(0.2)
-        assert not ctrl.is_locked
-    finally:
-        ctrl.stop()
-
-
-def test_out_of_travel_triggers_runaway():
-    # Target is reachable in wn, but the travel clamp pins the stage before it
-    # can get there -> out-of-range runaway abort.
-    ctrl, device, _ = make_rig(pos_min=-1.0, pos_max=1.0, step_limit=50.0)
-    try:
-        ctrl.set_wavenumber(12700.0)  # ~75 cm^-1 away; needs ~75 units of travel
-        assert wait_until(lambda: ctrl._aborted), "out-of-travel runaway never latched"
-        assert not ctrl.is_locked
+        ctrl.set_wavenumber(12625.10)  # below initial 12625.2
+        assert wait_until(lambda: device.qPOS() > start_pos + 0.005, timeout=4.0), \
+            "stage did not step up to lower the wavenumber"
     finally:
         ctrl.stop()
 
 
 def test_interface_parity_with_laser_controller():
-    # Scanner / DAQSystem rely on these attributes/methods existing on either laser.
+    # Scanner / DAQSystem rely on these existing on either laser.
     ctrl, _, _ = make_rig()
     for name in ("set_wavenumber", "is_stable", "get_wavenumber", "stop",
                  "update_config", "start_counterdrift", "stop_counterdrift"):
         assert callable(getattr(ctrl, name)), f"missing {name}"
     assert hasattr(ctrl, "tolerance")
     assert hasattr(ctrl, "config")
+
+
+def test_update_config_retunes_steps():
+    ctrl, _, _ = make_rig()
+    ctrl.update_config({"step_fine": 0.005, "tolerance": 0.01, "required_stable_samples": 5})
+    assert ctrl.step_fine == 0.005
+    assert ctrl.tolerance == 0.01
+    assert ctrl.required_stable_samples == 5

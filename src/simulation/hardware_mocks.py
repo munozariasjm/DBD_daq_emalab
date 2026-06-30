@@ -150,15 +150,17 @@ class MockMatisseDevice:
 class MockGratingDevice:
     """Stand-in for the grating PI motion stage exposed by grating_controller.py.
 
-    Public surface the controller uses: ``MOV(axis, target) -> bool`` and
-    ``qPOS(axis) -> float``. Public surface the EPICS mock reads: ``sim_wn``
-    (cm^-1), kept consistent with the stage position through the same
-    ``wn_per_unit`` calibration the real rig has:
+    Public surface the controller uses: ``MOV(target) -> bool`` and
+    ``qPOS() -> float``. Public surface the EPICS mock reads: ``sim_wn``
+    (cm^-1), kept consistent with the stage position through a linear slope:
 
         sim_wn = initial_wn + (pos - initial_pos) * wn_per_unit
 
-    The stage slews toward the last MOV target at ``slew_rate`` stage units per
-    second, so the controller's closed-loop servo sees realistic settling.
+    ``wn_per_unit`` models the real grating's position->wavenumber slope. It is a
+    simulation parameter only (the stepping controller does not use a slope); it
+    must stay NEGATIVE so the controller's negative-slope assumption (step the
+    stage up to lower the wavenumber) converges. The stage slews toward the last
+    MOV target at ``slew_rate`` stage units per second for realistic settling.
     """
 
     def __init__(self, initialization_params: dict = {}):
@@ -167,9 +169,8 @@ class MockGratingDevice:
         self._pos0 = self._pos
         self._target_pos = self._pos
         self._wn0 = float(initialization_params.get("initial_wn", 12625.0))
-        # cm^-1 per stage unit (SIGNED). For the sim to converge, the
-        # controller's control_settings.grating.wn_per_unit must share this
-        # sign.
+        # cm^-1 per stage unit (SIGNED). Negative for the real grating; see the
+        # class docstring.
         self._wn_per_unit = float(initialization_params.get("wn_per_unit", -1.0))
         self._slew_rate = float(initialization_params.get("slew_rate", 50.0))
         self._last_update = time.time()

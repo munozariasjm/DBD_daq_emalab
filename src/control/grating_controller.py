@@ -3,83 +3,30 @@
 The Matisse holds a wavelength on its own: once CounterDrift is activated its
 firmware servos the laser and LaserController only has to set a setpoint and
 watch the wavemeter. The grating laser has no such firmware lock. Its server
-(``LASERLABCOMPUTER/grating_controller.py``) is a bare positioner — it exposes
-only ``MOV(axis, target)`` (move the PI stage) and ``qPOS(axis)`` (read it);
-there is no wavelength concept on that side at all. The axis is a property of
-the stage, so it is owned by ``GratingDevice``; this controller just calls
-``MOV``/``qPOS`` and never sees an axis number.
+(``LASERLABCOMPUTER/grating_controller.py``, the ``laser==True`` / PI-stage
+path) is a bare positioner — ``MOV(target)`` moves the grating's drive stage
+and ``qPOS()`` reads it; there is no wavelength concept on that side at all.
 
-So the DAQ closes the loop itself. It reads the EPICS wavemeter, computes the
-wavenumber error, and nudges the stage via ``MOV`` until the measured
-wavenumber sits within tolerance of the target — the software equivalent of
-what CounterDrift does in firmware for the Matisse.
+So the DAQ closes the loop itself with the original grating "go_to" search:
+read the EPICS wavemeter, and walk the stage position toward the target one
+``step_fine`` at a time (with a ``step_coarse`` fallback when a fine step would
+not move us), until the wavemeter has sat within ``tolerance`` for
+``required_stable_samples`` consecutive reads. This grating has a *negative*
+slope — moving the stage in the + direction lowers the wavenumber — so when the
+wavemeter reads above target we step the position up, and vice versa.
 
-The only rig-specific number this needs is the calibration ``wn_per_unit``:
-how many cm^-1 the wavenumber changes per one stage position unit, *including
-sign*. It is a config knob (set/tuned on the bench), not hard-coded. Three
-independent guards keep a wrong sign or a bad calibration from driving the
-stage into a hard stop:
+This is the same algorithm and the same parameters the grating was scanned with
+(see ``control_settings.grating`` in settings.json): tolerance 0.0001 cm^-1,
+step_fine 0.0001, step_coarse 0.001. It is deliberately a small-step search, not
+a PID, and there is no command clamp — the stage's own travel limits bound it.
 
-  * ``step_limit`` — max stage motion commanded per poll,
-  * ``pos_min`` / ``pos_max`` — hard travel clamp on the commanded position,
-  * a divergence / out-of-range runaway abort that latches (mirrors the
-    Matisse runaway guard) when the error grows instead of shrinking, or the
-    commanded position is pinned at a travel limit while still off target.
-
-This class deliberately mirrors LaserController's public surface (set_wavenumber
-/ start_counterdrift / stop_counterdrift / is_stable / get_wavenumber / stop /
+This class mirrors LaserController's public surface (set_wavenumber /
+start_counterdrift / stop_counterdrift / is_stable / get_wavenumber / stop /
 update_config / tolerance / config) so Scanner and DAQSystem drive either laser
 through exactly the same calls.
 """
 
 import threading
-import time
-from collections import deque
-
-
-class GratingPID:
-    """Discrete PI servo: wavenumber error (cm^-1) -> stage step (units).
-
-    Output is an *incremental* stage move applied on top of the commanded
-    position each poll, so the laser converges geometrically rather than
-    jumping. The ``wn_per_unit`` calibration converts the wavenumber-domain
-    PID output into stage units; ``step_limit`` clamps a single move and
-    drives integral anti-windup.
-
-    With ki=0 (the default) this is a damped proportional feed-forward:
-    ``step = kp * error / wn_per_unit`` clamped to step_limit. Adding ki
-    removes residual steady-state error from calibration drift. The PID owns
-    these gains; the controller does not keep its own copies.
-    """
-
-    def __init__(self, kp, ki, wn_per_unit, step_limit):
-        self.kp = float(kp)
-        self.ki = float(ki)
-        self.wn_per_unit = float(wn_per_unit)
-        self.step_limit = float(step_limit)
-        self.reset()
-
-    def reset(self):
-        self._integral = 0.0
-
-    def compute(self, error: float, dt: float) -> float:
-        """Return the stage position increment (units) for this poll."""
-        if dt <= 0 or self.wn_per_unit == 0:
-            return 0.0
-        units_per_wn = 1.0 / self.wn_per_unit
-
-        # Integral accumulated before the clamp so anti-windup can undo it.
-        self._integral += error * dt
-        wn_output = self.kp * error + self.ki * self._integral
-        step = wn_output * units_per_wn
-
-        if step > self.step_limit:
-            step = self.step_limit
-            self._integral -= error * dt  # anti-windup: don't accumulate while saturated
-        elif step < -self.step_limit:
-            step = -self.step_limit
-            self._integral -= error * dt
-        return step
 
 
 class GratingController:
@@ -88,95 +35,56 @@ class GratingController:
         self.epics = epics_client
         self.config = dict(config)
 
-        # Servo gains live on the PID (single source of truth). The only
-        # rig-specific number is wn_per_unit: cm^-1 per stage unit, SIGNED. A
-        # wrong magnitude only slows convergence; a wrong sign is caught by the
-        # runaway guard below.
-        self._pid = GratingPID(
-            kp=float(self.config.get("kp", 0.5)),
-            ki=float(self.config.get("ki", 0.0)),
-            wn_per_unit=float(self.config.get("wn_per_unit", -1.0)),
-            step_limit=float(self.config.get("step_limit", 5.0)),
-        )
-
-        # Lock parameters
-        self.tolerance = float(self.config.get("tolerance", 1e-4))
-        self.poll_interval = float(self.config.get("poll_interval", 0.3))
+        # Control-loop parameters (defaults = the values the grating was run with).
+        self.tolerance = float(self.config.get("tolerance", 0.0001))
+        self.step_fine = float(self.config.get("step_fine", 0.0001))
+        self.step_coarse = float(self.config.get("step_coarse", 0.001))
+        self.poll_interval = float(self.config.get("poll_interval", 0.01))
         self.required_stable_samples = int(self.config.get("required_stable_samples", 4))
-        # Hard travel limits of the stage (stage units). Defaults are wide; set
-        # these to the real mechanical limits to protect the hardware.
-        self.pos_min = float(self.config.get("pos_min", -1e9))
-        self.pos_max = float(self.config.get("pos_max", 1e9))
-
-        # Runaway guard: abort if the error keeps growing (wrong sign / dead
-        # feedback) or the commanded position is pinned at a travel limit while
-        # still off target, for this many consecutive polls.
-        self.runaway_samples = int(self.config.get("runaway_samples", 5))
-        # Margin (cm^-1) by which the error must grow to count as diverging, so
-        # wavemeter noise alone never trips the guard.
-        self.runaway_margin = float(self.config.get("runaway_margin", 1e-4))
-
-        # Default to holding the lock: the grating has no firmware hold, so the
-        # servo must keep running to reject drift while a bin accumulates.
-        self.continuous = bool(self.config.get("continuous", True))
 
         self.wavechannel = int(self.config.get("wavechannel", 1))
-        self.wm_avg_samples = max(1, int(self.config.get("wm_averaging_samples", 5)))
         self.wm_pv = self.config.get("wm_pv", f"LaserLab:wavenumber_{self.wavechannel}")
 
         # State
-        self._wm_buffer = deque(maxlen=self.wm_avg_samples)
         self.target_wn = 0.0
-        self.is_locked = False
-        # Commanded stage position (units). Seeded from qPOS on first engage;
-        # tracked internally thereafter since MOV is absolute.
-        self._commanded_pos = None
-        # Latched True after a runaway abort so later bins refuse to re-engage.
-        self._aborted = False
+        self.is_moving = False
 
         # Threading
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.control_thread = None
-        self._target_changed = threading.Event()
 
     # ---- Public API used by GUI / DAQSystem / Scanner ----
 
     def set_wavenumber(self, target_wn: float):
-        """Set the lock target and start (or re-aim) the servo loop."""
-        target_wn = float(target_wn)
+        """Set the target and start (or re-aim) the stepping loop."""
         with self.lock:
-            self.target_wn = target_wn
-            print(f"[Grating] set_wavenumber({target_wn:.6f})")
-            if self.control_thread and self.control_thread.is_alive():
-                self._target_changed.set()
-                return
+            self.target_wn = float(target_wn)
+            print(f"[Grating] set_wavenumber({self.target_wn:.6f})")
             self.stop_event.clear()
-            self._wm_buffer.clear()
-            self.is_locked = False
+            if self.control_thread and self.control_thread.is_alive():
+                # Loop already running: it reads target_wn each step and re-aims.
+                return
+            self.is_moving = True
             self.control_thread = threading.Thread(target=self._control_loop, daemon=True)
             self.control_thread.start()
 
     def start_counterdrift(self, target_wn: float):
-        """Engage and hold a wavenumber indefinitely (parity with LaserController)."""
-        with self.lock:
-            self.continuous = True
+        """Engage a wavenumber (parity with LaserController)."""
         self.set_wavenumber(target_wn)
 
     def stop_counterdrift(self):
-        with self.lock:
-            self.continuous = False
         self.stop()
 
     def is_stable(self, tolerance=None) -> bool:
-        """True when the loop has locked AND the latest wavemeter read is in
-        tolerance. Scanner gates event accumulation on this."""
+        """True when the stepping loop has settled AND the latest wavemeter read
+        is in tolerance. Scanner gates event accumulation on this."""
         tol = self.tolerance if tolerance is None else float(tolerance)
         wn = self.get_wavenumber()
         with self.lock:
             target = self.target_wn
-            locked = self.is_locked
-        return locked and abs(wn - target) < tol
+            moving = self.is_moving
+        return (not moving) and abs(wn - target) < tol
 
     def get_wavenumber(self) -> float:
         """Single raw wavemeter read (cm^-1) on the configured channel."""
@@ -188,201 +96,97 @@ class GratingController:
         if thread and thread.is_alive():
             thread.join(timeout=max(5.0, self.poll_interval * 5))
         with self.lock:
-            self.is_locked = False
+            self.is_moving = False
 
     def update_config(self, new_config: dict):
         """Hot update. Safe to call while the loop is running."""
         with self.lock:
             self.config.update(new_config)
-            # Gains write straight to the PID (its the single source of truth).
-            self._pid.kp = float(self.config.get("kp", self._pid.kp))
-            self._pid.ki = float(self.config.get("ki", self._pid.ki))
-            self._pid.wn_per_unit = float(self.config.get("wn_per_unit", self._pid.wn_per_unit))
-            self._pid.step_limit = float(self.config.get("step_limit", self._pid.step_limit))
             self.tolerance = float(self.config.get("tolerance", self.tolerance))
+            self.step_fine = float(self.config.get("step_fine", self.step_fine))
+            self.step_coarse = float(self.config.get("step_coarse", self.step_coarse))
             self.poll_interval = float(self.config.get("poll_interval", self.poll_interval))
             self.required_stable_samples = int(
                 self.config.get("required_stable_samples", self.required_stable_samples)
             )
-            self.pos_min = float(self.config.get("pos_min", self.pos_min))
-            self.pos_max = float(self.config.get("pos_max", self.pos_max))
-            self.runaway_samples = int(self.config.get("runaway_samples", self.runaway_samples))
-            self.runaway_margin = float(self.config.get("runaway_margin", self.runaway_margin))
-            self.continuous = bool(self.config.get("continuous", self.continuous))
             new_channel = int(self.config.get("wavechannel", self.wavechannel))
             if new_channel != self.wavechannel:
                 self.wavechannel = new_channel
                 self.wm_pv = self.config.get("wm_pv", f"LaserLab:wavenumber_{self.wavechannel}")
-                self._wm_buffer.clear()
-            new_avg = max(1, int(self.config.get("wm_averaging_samples", self.wm_avg_samples)))
-            if new_avg != self.wm_avg_samples:
-                self.wm_avg_samples = new_avg
-                self._wm_buffer = deque(maxlen=new_avg)
         print(
-            f"[Grating] config updated: tol={self.tolerance}, poll={self.poll_interval}, "
-            f"wn_per_unit={self._pid.wn_per_unit}, kp={self._pid.kp}, ki={self._pid.ki}, "
-            f"step_limit={self._pid.step_limit}, pos=[{self.pos_min},{self.pos_max}], "
-            f"cont={self.continuous}"
+            f"[Grating] config updated: tol={self.tolerance}, step_fine={self.step_fine}, "
+            f"step_coarse={self.step_coarse}, poll={self.poll_interval}, "
+            f"stable={self.required_stable_samples}, chan={self.wavechannel}"
         )
 
     # ---- Internal helpers ----
 
-    def _averaged_wavemeter(self) -> float:
-        reading = self.get_wavenumber()
-        self._wm_buffer.append(reading)
-        return sum(self._wm_buffer) / len(self._wm_buffer)
-
-    def _sleep(self, seconds: float) -> bool:
-        """Sleep, returning True early if stop_event fires."""
-        if seconds <= 0:
-            return self.stop_event.is_set()
-        return self.stop_event.wait(seconds)
-
-    def _seed_position(self):
-        """Read the current stage position once so commanded moves are absolute
-        and start from where the stage actually is."""
-        if self._commanded_pos is not None:
-            return
+    def _read_position(self) -> float:
         try:
-            self._commanded_pos = float(self.grating.qPOS())
-            print(f"[Grating] seeded stage position at {self._commanded_pos:.4f}")
+            return float(self.grating.qPOS())
         except Exception as e:
-            self._commanded_pos = 0.0
-            print(f"[Grating] qPOS failed ({e}); seeding commanded position at 0.0")
-
-    def _move(self, new_pos: float) -> bool:
-        """Clamp to travel limits and issue an absolute MOV. Returns True if the
-        commanded position was pinned at a travel limit (caller's out-of-range
-        signal)."""
-        clamped = max(self.pos_min, min(self.pos_max, new_pos))
-        at_limit = clamped != new_pos
-        self._commanded_pos = clamped
-        try:
-            if not self.grating.MOV(clamped):
-                print(f"[Grating] WARNING: server rejected MOV({clamped:.4f})")
-        except Exception as e:
-            print(f"[Grating] MOV failed: {e}")
-        return at_limit
-
-    def _handle_runaway(self, wn: float, target: float, reason: str):
-        delta = abs(wn - target)
-        print("[Grating] ============== SERVO RUNAWAY ==============")
-        print(f"[Grating] Wavemeter {wn:.6f} cm^-1 is {delta:.4f} from target {target:.6f}.")
-        print(f"[Grating] Reason: {reason}")
-        print("[Grating] Most likely 'wn_per_unit' has the WRONG SIGN, the wavemeter")
-        print("[Grating] channel is not this laser, or the stage is out of travel.")
-        print("[Grating] Disengaging and latching aborted. Fix the calibration and")
-        print("[Grating] restart the DAQ.")
-        print("[Grating] ===========================================")
-        self._aborted = True
-        with self.lock:
-            self.is_locked = False
-        self.stop_event.set()
+            print(f"[Grating] qPOS failed: {e}")
+            return 0.0
 
     # ---- Main control loop ----
 
     def _control_loop(self):
-        print(f"[Grating] control loop starting (target={self.target_wn:.6f})")
-        if self._aborted:
-            print("[Grating] ABORTED state from a prior runaway — not engaging. "
-                  "Fix 'wn_per_unit' / wavemeter channel and restart the DAQ.")
-            return
+        with self.lock:
+            target = self.target_wn
+        print(f"[Grating] control loop starting (target={target:.6f})")
 
-        self._seed_position()
+        wn = self.get_wavenumber()
+        position = self._read_position()
+        prevpos = position
+        stable_samples = 0
 
-        # Outer aim/re-aim loop: re-entered whenever set_wavenumber() nudges
-        # _target_changed.
         while not self.stop_event.is_set():
+            wn = self.get_wavenumber()
+            position = self._read_position()
             with self.lock:
-                target_wn = self.target_wn
-            self._pid.reset()
-            self._target_changed.clear()
-            with self.lock:
-                self.is_locked = False
-                self._wm_buffer.clear()
+                target = self.target_wn
 
-            print(f"[Grating] servo to {target_wn:.6f} cm^-1 "
-                  f"(wn_per_unit={self._pid.wn_per_unit}, kp={self._pid.kp})")
-
-            stable_samples = 0
-            diverge_count = 0
-            limit_count = 0
-            prev_abs_error = None
-            printed_locked = False
-            last_t = time.time()
-
-            while not self.stop_event.is_set():
-                if self._target_changed.is_set():
-                    break  # re-aim from the outer loop
-
-                wn = self._averaged_wavemeter()
-                with self.lock:
-                    cur_target = self.target_wn
-                error = cur_target - wn
-                abs_error = abs(error)
-
-                now = time.time()
-                dt = now - last_t
-                last_t = now
-
-                if abs_error < self.tolerance:
-                    stable_samples += 1
-                    diverge_count = 0
-                    limit_count = 0
-                    prev_abs_error = abs_error
-                    if stable_samples >= self.required_stable_samples:
-                        with self.lock:
-                            self.is_locked = True
-                        if not printed_locked:
-                            print(f"[Grating] LOCK ACQUIRED at {wn:.6f} cm^-1 "
-                                  f"(target {cur_target:.6f}, |Δ|={abs_error:.2e})")
-                            printed_locked = True
-                        if not self.continuous:
-                            break
-                        if self._sleep(self.poll_interval):
-                            break
-                        continue
-                else:
-                    if printed_locked:
-                        with self.lock:
-                            self.is_locked = False
-                        print(f"[Grating] LOCK LOST at {wn:.6f} cm^-1 "
-                              f"(target {cur_target:.6f}, |Δ|={abs_error:.2e})")
-                        printed_locked = False
-                    stable_samples = 0
-
-                    # Runaway: error growing instead of shrinking => wrong sign /
-                    # dead feedback. prev_abs_error is only set after a move, so
-                    # this measures the response to our own correction.
-                    if prev_abs_error is not None and abs_error > prev_abs_error + self.runaway_margin:
-                        diverge_count += 1
-                        if diverge_count >= self.runaway_samples:
-                            self._handle_runaway(wn, cur_target, "error diverging after corrective moves")
-                            return
-                    else:
-                        diverge_count = 0
-
-                    step = self._pid.compute(error, dt)
-                    at_limit = self._move(self._commanded_pos + step)
-                    prev_abs_error = abs_error
-
-                    # Out of travel while still off target.
-                    if at_limit:
-                        limit_count += 1
-                        if limit_count >= self.runaway_samples:
-                            self._handle_runaway(wn, cur_target, "commanded position pinned at travel limit")
-                            return
-                    else:
-                        limit_count = 0
-
-                if self._sleep(self.poll_interval):
+            # Stability: enough consecutive in-tolerance reads -> done.
+            if abs(wn - target) < self.tolerance:
+                stable_samples += 1
+                if stable_samples >= self.required_stable_samples:
                     break
-
-            if self._target_changed.is_set():
+                if self.stop_event.wait(self.poll_interval):
+                    break
                 continue
-            break
+            stable_samples = 0
 
-        print(f"[Grating] control loop exiting (locked={self.is_locked})")
+            # Negative slope: stepping the position up lowers the wavenumber.
+            if wn >= target + self.tolerance:
+                # Wavemeter above target -> step position up to bring it down.
+                if abs((position + self.step_fine) - prevpos) > 1e-9:
+                    move_cmd = position + self.step_fine
+                else:
+                    move_cmd = position - self.step_coarse
+            else:
+                # Wavemeter below target -> step position down to raise it.
+                if abs((position - self.step_fine) - prevpos) > 1e-9:
+                    move_cmd = position - self.step_fine
+                else:
+                    move_cmd = position + self.step_coarse
+
+            try:
+                if not self.grating.MOV(move_cmd):
+                    print(f"[Grating] WARNING: server rejected MOV({move_cmd:.6f})")
+            except Exception as e:
+                print(f"[Grating] MOV failed: {e}")
+                break
+
+            print(f"[Grating] pos {position:.6f} -> {move_cmd:.6f}, WN={wn:.6f} "
+                  f"(target {target:.6f}, |Δ|={abs(wn - target):.2e})")
+
+            if self.stop_event.wait(self.poll_interval):
+                break
+            prevpos = position
+
+        with self.lock:
+            self.is_moving = False
+        print(f"[Grating] control loop exiting (WN={wn:.6f}, target={target:.6f})")
 
 
 if __name__ == "__main__":
